@@ -36,42 +36,40 @@ export default function Home() {
       </header>
 
       <main>
-        <section className="flex min-h-[calc(100vh-80px)] flex-col justify-between px-6 pb-10 pt-16 md:px-10 md:pt-20">
-          <div className="max-w-4xl">
-            <p className="mb-6 text-sm font-medium uppercase tracking-[0.2em] text-white/40">
-              Deckbuilding para Magic: The Gathering
-            </p>
-
-            <h1 className="text-[18vw] font-black uppercase leading-[0.75] tracking-[-0.075em] md:text-[13vw]">
-              Curve
-              <span className="text-white/35">Out</span>
+        <section className="flex min-h-[calc(100vh-80px)] items-center justify-center px-6 md:px-10">
+          <div className="flex w-full max-w-6xl flex-col items-center text-center">
+            <h1 className="text-[16vw] font-black uppercase leading-[0.82] tracking-[-0.07em] md:text-[12vw]">
+              CURVE
+              <span className="text-white/35">OUT</span>
             </h1>
-          </div>
 
-          <div className="mt-20 grid gap-10 border-t border-white/10 pt-8 md:grid-cols-[1.4fr_1fr]">
+            <div className="mt-10 flex flex-wrap justify-center gap-3">
+              <button className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white">
+                Criar meu deck
+              </button>
+
+              <button className="rounded-lg border border-white/15 px-6 py-3 font-medium text-white/75 transition hover:border-white/30 hover:text-white">
+                Explorar decks
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="border-t border-white/10 px-6 py-24 md:px-10 md:py-32">
+          <div className="grid gap-10 md:grid-cols-[1.2fr_1fr]">
             <div>
-              <h2 className="max-w-2xl text-3xl font-medium leading-tight tracking-tight md:text-5xl">
+              <h2 className="text-4xl font-medium leading-tight tracking-tight md:text-6xl">
                 Construa melhor.
                 <br />
                 Encontre sua curva.
               </h2>
             </div>
 
-            <div className="flex flex-col items-start justify-between gap-8">
-              <p className="max-w-md text-base leading-7 text-white/55">
+            <div className="flex flex-col gap-8">
+              <p className="max-w-md text-base leading-8 text-white/55 md:text-lg">
                 Monte decks, explore cartas, acompanhe sua coleção e encontre
                 novas ideias em uma plataforma feita para jogadores brasileiros.
               </p>
-
-              <div className="flex flex-wrap gap-3">
-                <button className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white">
-                  Criar meu deck
-                </button>
-
-                <button className="rounded-lg border border-white/15 px-6 py-3 font-medium text-white/75 transition hover:border-white/30 hover:text-white">
-                  Explorar decks
-                </button>
-              </div>
             </div>
           </div>
         </section>
