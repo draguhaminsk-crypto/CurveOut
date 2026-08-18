@@ -4,7 +4,7 @@ export default function Home() {
       <header className="flex h-20 items-center justify-between border-b border-white/10 px-6 md:px-10">
         <a
           href="/"
-          className="text-2xl font-bold tracking-[-0.04em] uppercase"
+          className="text-2xl font-bold uppercase tracking-[-0.04em]"
         >
           CurveOut
         </a>
@@ -13,12 +13,15 @@ export default function Home() {
           <a href="#" className="transition hover:text-white">
             Decks
           </a>
+
           <a href="#" className="transition hover:text-white">
             Cartas
           </a>
+
           <a href="#" className="transition hover:text-white">
             Coleções
           </a>
+
           <a href="#" className="transition hover:text-white">
             Explorar
           </a>
@@ -37,7 +40,7 @@ export default function Home() {
 
       <main>
         <section className="flex min-h-[calc(100vh-80px)] items-center justify-center px-6 md:px-10">
-          <div className="flex w-full max-w-6xl flex-col items-center text-center">
+          <div className="flex w-full max-w-7xl flex-col items-center text-center">
             <h1 className="text-[16vw] font-black uppercase leading-[0.82] tracking-[-0.07em] md:text-[12vw]">
               CURVE
               <span className="text-white/35">OUT</span>
@@ -51,25 +54,6 @@ export default function Home() {
               <button className="rounded-lg border border-white/15 px-6 py-3 font-medium text-white/75 transition hover:border-white/30 hover:text-white">
                 Explorar decks
               </button>
-            </div>
-          </div>
-        </section>
-
-        <section className="border-t border-white/10 px-6 py-24 md:px-10 md:py-32">
-          <div className="grid gap-10 md:grid-cols-[1.2fr_1fr]">
-            <div>
-              <h2 className="text-4xl font-medium leading-tight tracking-tight md:text-6xl">
-                Construa melhor.
-                <br />
-                Encontre sua curva.
-              </h2>
-            </div>
-
-            <div className="flex flex-col gap-8">
-              <p className="max-w-md text-base leading-8 text-white/55 md:text-lg">
-                Monte decks, explore cartas, acompanhe sua coleção e encontre
-                novas ideias em uma plataforma feita para jogadores brasileiros.
-              </p>
             </div>
           </div>
         </section>
@@ -115,7 +99,8 @@ export default function Home() {
                   </h3>
 
                   <p className="text-sm text-white/35">
-                    Ver deck <span className="transition group-hover:ml-1">→</span>
+                    Ver deck{" "}
+                    <span className="transition group-hover:ml-1">→</span>
                   </p>
                 </div>
               </article>
