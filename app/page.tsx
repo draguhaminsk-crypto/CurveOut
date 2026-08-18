@@ -2,6 +2,7 @@ import { Cinzel } from "next/font/google";
 
 import CommanderPrintCarousel from "./components/CommanderPrintCarousel";
 import type { CommanderPrint } from "./components/CommanderPrintCarousel";
+import UserMenu from "./components/UserMenu";
 
 const cinzel = Cinzel({
   subsets: ["latin"],
@@ -64,7 +65,6 @@ function getCardImage(card: Commander) {
 
 async function getRandomCommander(): Promise<Commander | null> {
   try {
-    // Primeiro tenta pegar um comandante com impressão em português.
     const ptResponse = await fetch(
       "https://api.scryfall.com/cards/random?q=is%3Acommander+lang%3Apt",
       {
@@ -77,7 +77,6 @@ async function getRandomCommander(): Promise<Commander | null> {
       return ptResponse.json();
     }
 
-    // Se falhar, usa qualquer comandante.
     const enResponse = await fetch(
       "https://api.scryfall.com/cards/random?q=is%3Acommander",
       {
@@ -131,7 +130,7 @@ async function getCommanderPrints(
       data: Commander[];
     } = await response.json();
 
-    const otherPrints: CommanderPrint[] = result.data
+    const otherPrints = result.data
       .map((card) => {
         const image = getCardImage(card);
 
@@ -147,23 +146,18 @@ async function getCommanderPrints(
           image,
         };
       })
-      .filter(
-        (print): print is CommanderPrint =>
-          print !== null
-      );
+      .filter((print) => print !== null) as CommanderPrint[];
 
     const allPrints = currentPrint
       ? [currentPrint, ...otherPrints]
       : otherPrints;
 
-    // Remove duplicatas.
     const uniquePrints = Array.from(
       new Map(
         allPrints.map((print) => [print.id, print])
       ).values()
     );
 
-    // Evita dezenas de cartas no carrossel.
     return uniquePrints.slice(0, 12);
   } catch {
     return currentPrint ? [currentPrint] : [];
@@ -217,32 +211,36 @@ export default async function Home() {
         </a>
 
         <nav className="hidden items-center gap-8 text-sm text-white/65 md:flex">
-          <a href="#" className="transition hover:text-white">
+          <a
+            href="/decks"
+            className="transition hover:text-white"
+          >
             Decks
           </a>
 
-          <a href="#" className="transition hover:text-white">
+          <a
+            href="/cartas"
+            className="transition hover:text-white"
+          >
             Cartas
           </a>
 
-          <a href="#" className="transition hover:text-white">
+          <a
+            href="/colecoes"
+            className="transition hover:text-white"
+          >
             Coleções
           </a>
 
-          <a href="#" className="transition hover:text-white">
+          <a
+            href="/explorar"
+            className="transition hover:text-white"
+          >
             Explorar
           </a>
         </nav>
 
-        <div className="flex items-center gap-3">
-          <button className="hidden px-4 py-2 text-sm text-white/70 transition hover:text-white sm:block">
-            Entrar
-          </button>
-
-          <button className="rounded-lg bg-[#f4f1e8] px-4 py-2 text-sm font-semibold text-black transition hover:bg-white">
-            Criar conta
-          </button>
-        </div>
+        <UserMenu />
       </header>
 
       <main>
@@ -305,8 +303,7 @@ export default async function Home() {
             </div>
 
             {commander ? (
-              <div className="grid items-center gap-12 lg:grid-cols-[430px_1fr]">
-                {/* CARTA / CARROSSEL */}
+              <div className="grid items-center gap-12 lg:grid-cols-[520px_1fr]">
                 <div className="min-w-0">
                   {commanderPrints.length > 1 ? (
                     <CommanderPrintCarousel
@@ -324,7 +321,6 @@ export default async function Home() {
                   )}
                 </div>
 
-                {/* INFORMAÇÕES */}
                 <div className="max-w-3xl">
                   <p className="mb-4 text-sm uppercase tracking-[0.14em] text-white/35">
                     {commanderType}
