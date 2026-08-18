@@ -3,10 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "../../lib/supabase/client";
 
+type Profile = {
+  nickname: string;
+  avatar_url: string | null;
+};
+
 export default function UserMenu() {
   const [supabase] = useState(() => createClient());
 
   const [nickname, setNickname] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+
   const [loggedIn, setLoggedIn] = useState(false);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
@@ -22,19 +29,25 @@ export default function UserMenu() {
       if (!user) {
         setLoggedIn(false);
         setNickname(null);
+        setAvatarUrl(null);
         setLoading(false);
         return;
       }
 
       setLoggedIn(true);
 
-      const { data: profile } = await supabase
+      const { data: profile, error } = await supabase
         .from("profiles")
-        .select("nickname")
+        .select("nickname, avatar_url")
         .eq("id", user.id)
-        .maybeSingle();
+        .maybeSingle<Profile>();
+
+      if (error) {
+        console.error("Erro ao carregar perfil:", error);
+      }
 
       setNickname(profile?.nickname ?? null);
+      setAvatarUrl(profile?.avatar_url ?? null);
       setLoading(false);
     }
 
@@ -106,13 +119,16 @@ export default function UserMenu() {
       ref={menuRef}
       className="relative"
     >
+      {/* AVATAR DO HEADER */}
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-label="Abrir menu do usuário"
         aria-expanded={open}
         className="
-          flex h-10 w-10 items-center justify-center
+          flex h-10 w-10
+          items-center justify-center
+          overflow-hidden
           rounded-full
           border border-white/15
           bg-white/[0.05]
@@ -121,36 +137,83 @@ export default function UserMenu() {
           transition
           hover:border-white/30
           hover:bg-white/[0.08]
+          active:scale-95
         "
       >
-        {initial}
+        {avatarUrl ? (
+          <img
+            src={avatarUrl}
+            alt={nickname ? `Foto de @${nickname}` : "Foto de perfil"}
+            className="h-full w-full object-cover object-center"
+          />
+        ) : (
+          <span>{initial}</span>
+        )}
       </button>
 
-      {open && (
-        <div
-          className="
-            absolute right-0 top-12 z-50
-            w-64
-            overflow-hidden
-            rounded-xl
-            border border-white/10
-            bg-[#111113]
-            shadow-2xl
-          "
-        >
-          <div className="border-b border-white/10 px-4 py-4">
-            <p className="text-sm font-medium text-[#f4f1e8]">
-              {nickname ? `@${nickname}` : "Meu perfil"}
-            </p>
+      {/* DROPDOWN */}
+      <div
+  className={`
+    absolute right-0 top-12 z-50
+    w-64
+    origin-top-right
+    overflow-hidden
+    rounded-xl
+    border border-white/10
+    bg-[#111113]
+    shadow-2xl
 
-            <p className="mt-1 text-xs text-white/35">
-              Conta CurveOut
-            </p>
+    transition-all
+    duration-500
+    ease-out
+
+    ${
+      open
+        ? "pointer-events-auto translate-y-0 scale-100 opacity-100"
+        : "pointer-events-none -translate-y-2 scale-95 opacity-0"
+    }
+  `}
+>
+          {/* USUÁRIO */}
+          <div className="flex items-center gap-3 border-b border-white/10 px-4 py-4">
+            <div
+              className="
+                flex h-10 w-10 shrink-0
+                items-center justify-center
+                overflow-hidden
+                rounded-full
+                border border-white/10
+                bg-white/[0.05]
+                text-sm font-semibold
+              "
+            >
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt={nickname ? `Foto de @${nickname}` : "Foto de perfil"}
+                  className="h-full w-full object-cover object-center"
+                />
+              ) : (
+                <span>{initial}</span>
+              )}
+            </div>
+
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-[#f4f1e8]">
+                {nickname ? `@${nickname}` : "Meu perfil"}
+              </p>
+
+              <p className="mt-0.5 text-xs text-white/35">
+                Conta CurveOut
+              </p>
+            </div>
           </div>
 
+          {/* MENU */}
           <div className="p-2">
             <a
               href="/perfil"
+              onClick={() => setOpen(false)}
               className="block rounded-lg px-3 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.06] hover:text-white"
             >
               Perfil
@@ -158,13 +221,15 @@ export default function UserMenu() {
 
             <a
               href="/decks/novo"
+              onClick={() => setOpen(false)}
               className="block rounded-lg px-3 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.06] hover:text-white"
             >
-              Novo deck
+              Criar deck
             </a>
 
             <a
               href="/meus-decks"
+              onClick={() => setOpen(false)}
               className="block rounded-lg px-3 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.06] hover:text-white"
             >
               Meus decks
@@ -172,6 +237,7 @@ export default function UserMenu() {
 
             <a
               href="/minha-colecao"
+              onClick={() => setOpen(false)}
               className="block rounded-lg px-3 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.06] hover:text-white"
             >
               Minha coleção
@@ -179,12 +245,14 @@ export default function UserMenu() {
 
             <a
               href="/configuracoes"
+              onClick={() => setOpen(false)}
               className="block rounded-lg px-3 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.06] hover:text-white"
             >
               Configurações
             </a>
           </div>
 
+          {/* SAIR */}
           <div className="border-t border-white/10 p-2">
             <button
               type="button"
@@ -195,7 +263,6 @@ export default function UserMenu() {
             </button>
           </div>
         </div>
-      )}
     </div>
   );
 }
