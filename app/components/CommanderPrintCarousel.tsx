@@ -1,7 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
-import type { UIEvent } from "react";
+import { useState } from "react";
 
 export type CommanderPrint = {
   id: string;
@@ -21,9 +20,9 @@ export default function CommanderPrintCarousel({
   alt,
 }: Props) {
   const [current, setCurrent] = useState(0);
-
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const cardRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const [dragStart, setDragStart] = useState<number | null>(null);
+  const [dragOffset, setDragOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
 
   if (prints.length === 0) {
     return null;
@@ -31,151 +30,179 @@ export default function CommanderPrintCarousel({
 
   const selected = prints[current];
 
-  function goTo(index: number) {
-    const container = containerRef.current;
-    const card = cardRefs.current[index];
+  function previous() {
+    setCurrent((index) =>
+      index === 0 ? prints.length - 1 : index - 1
+    );
+  }
 
-    if (!container || !card) {
+  function next() {
+    setCurrent((index) =>
+      index === prints.length - 1 ? 0 : index + 1
+    );
+  }
+
+  function getRelativePosition(index: number) {
+    let distance = index - current;
+
+    if (distance > prints.length / 2) {
+      distance -= prints.length;
+    }
+
+    if (distance < -prints.length / 2) {
+      distance += prints.length;
+    }
+
+    return distance;
+  }
+
+  function handlePointerDown(
+    event: React.PointerEvent<HTMLDivElement>
+  ) {
+    setDragStart(event.clientX);
+    setDragging(true);
+    setDragOffset(0);
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handlePointerMove(
+    event: React.PointerEvent<HTMLDivElement>
+  ) {
+    if (!dragging || dragStart === null) {
       return;
     }
 
-    setCurrent(index);
+    const offset = event.clientX - dragStart;
 
-    const left =
-      card.offsetLeft -
-      container.clientWidth / 2 +
-      card.clientWidth / 2;
-
-    container.scrollTo({
-      left,
-      behavior: "smooth",
-    });
+    setDragOffset(offset);
   }
 
-  function handleScroll(event: UIEvent<HTMLDivElement>) {
-    const container = event.currentTarget;
-
-    const center =
-      container.scrollLeft + container.clientWidth / 2;
-
-    let closestIndex = 0;
-    let closestDistance = Infinity;
-
-    cardRefs.current.forEach((card, index) => {
-      if (!card) {
-        return;
-      }
-
-      const cardCenter =
-        card.offsetLeft + card.offsetWidth / 2;
-
-      const distance = Math.abs(cardCenter - center);
-
-      if (distance < closestDistance) {
-        closestDistance = distance;
-        closestIndex = index;
-      }
-    });
-
-    setCurrent(closestIndex);
-  }
-
-  function getCardTransform(index: number) {
-    const distance = index - current;
-
-    if (distance === 0) {
-      return {
-        transform:
-          "perspective(1000px) translateY(0px) scale(1) rotateY(0deg) rotateZ(0deg)",
-        opacity: 1,
-        zIndex: 30,
-      };
+  function handlePointerUp(
+    event: React.PointerEvent<HTMLDivElement>
+  ) {
+    if (!dragging) {
+      return;
     }
 
-    if (distance === -1) {
-      return {
-        transform:
-          "perspective(1000px) translateY(18px) scale(0.88) rotateY(14deg) rotateZ(-4deg)",
-        opacity: 0.55,
-        zIndex: 20,
-      };
+    const threshold = 70;
+
+    if (dragOffset > threshold) {
+      previous();
+    } else if (dragOffset < -threshold) {
+      next();
     }
 
-    if (distance === 1) {
-      return {
-        transform:
-          "perspective(1000px) translateY(18px) scale(0.88) rotateY(-14deg) rotateZ(4deg)",
-        opacity: 0.55,
-        zIndex: 20,
-      };
-    }
+    setDragging(false);
+    setDragStart(null);
+    setDragOffset(0);
 
-    if (distance < -1) {
-      return {
-        transform:
-          "perspective(1000px) translateY(34px) scale(0.76) rotateY(20deg) rotateZ(-7deg)",
-        opacity: 0.22,
-        zIndex: 10,
-      };
-    }
-
-    return {
-      transform:
-        "perspective(1000px) translateY(34px) scale(0.76) rotateY(-20deg) rotateZ(7deg)",
-      opacity: 0.22,
-      zIndex: 10,
-    };
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {}
   }
 
   return (
     <div className="w-full">
       <div
-        ref={containerRef}
-        onScroll={handleScroll}
-        className="
-          flex
-          snap-x
-          snap-mandatory
-          items-center
-          gap-0
-          overflow-x-auto
-          overflow-y-hidden
-          py-10
-          [scrollbar-width:none]
-          [&::-webkit-scrollbar]:hidden
-        "
-        style={{
-          paddingLeft: "calc(50% - 145px)",
-          paddingRight: "calc(50% - 145px)",
-        }}
+        className={`
+          relative
+          mx-auto
+          h-[430px]
+          w-full
+          max-w-[520px]
+          select-none
+          overflow-hidden
+          touch-pan-y
+          ${
+            dragging
+              ? "cursor-grabbing"
+              : "cursor-grab"
+          }
+        `}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
       >
         {prints.map((print, index) => {
-          const active = current === index;
-          const visual = getCardTransform(index);
+          const position = getRelativePosition(index);
+
+          if (Math.abs(position) > 1) {
+            return null;
+          }
+
+          const active = position === 0;
+
+          const movement = dragOffset;
+
+          let baseX = 0;
+          let translateY = 0;
+          let scale = 1;
+          let rotateY = 0;
+          let rotateZ = 0;
+          let opacity = 1;
+          let zIndex = 10;
+
+          if (position === 0) {
+            baseX = -50;
+            translateY = 0;
+            scale = 1;
+            rotateY = 0;
+            rotateZ = 0;
+            opacity = 1;
+            zIndex = 30;
+          }
+
+          if (position === -1) {
+            baseX = -115;
+            translateY = 28;
+            scale = 0.78;
+            rotateY = 15;
+            rotateZ = -5;
+            opacity = 0.32;
+            zIndex = 10;
+          }
+
+          if (position === 1) {
+            baseX = 15;
+            translateY = 28;
+            scale = 0.78;
+            rotateY = -15;
+            rotateZ = 5;
+            opacity = 0.32;
+            zIndex = 10;
+          }
+
+          const dragPercent = movement / 2.6;
+
+          const transform = `
+            translateX(calc(${baseX}% + ${movement}px))
+            translateY(${translateY}px)
+            scale(${scale})
+            rotateY(${rotateY - dragPercent * 0.12}deg)
+            rotateZ(${rotateZ + dragPercent * 0.03}deg)
+          `;
 
           return (
             <button
               key={print.id}
-              ref={(element) => {
-                cardRefs.current[index] = element;
-              }}
               type="button"
-              onClick={() => goTo(index)}
-              className="
-                relative
-                w-[290px]
-                shrink-0
-                snap-center
-                cursor-pointer
-                outline-none
-              "
+              onClick={() => {
+                if (dragging) return;
+
+                if (position === -1) previous();
+                if (position === 1) next();
+              }}
+              className="absolute left-1/2 top-4 w-[260px] outline-none"
               style={{
-                transform: visual.transform,
-                opacity: visual.opacity,
-                zIndex: visual.zIndex,
-                marginLeft: index === 0 ? 0 : "-65px",
-                transition:
-                  "transform 350ms cubic-bezier(0.22, 1, 0.36, 1), opacity 350ms ease",
+                transform,
+                opacity,
+                zIndex,
+                transition: dragging
+                  ? "none"
+                  : "transform 420ms cubic-bezier(0.22, 1, 0.36, 1), opacity 350ms ease",
+                transformStyle: "preserve-3d",
               }}
             >
               <img
@@ -183,15 +210,13 @@ export default function CommanderPrintCarousel({
                 alt={`${alt} — ${print.set_name}`}
                 draggable={false}
                 className={`
+                  pointer-events-none
                   w-full
-                  select-none
                   rounded-2xl
-                  transition-all
-                  duration-300
                   ${
                     active
-                      ? "brightness-100 drop-shadow-[0_25px_30px_rgba(0,0,0,0.55)]"
-                      : "brightness-75"
+                      ? "brightness-100 drop-shadow-[0_24px_30px_rgba(0,0,0,0.55)]"
+                      : "brightness-50"
                   }
                 `}
               />
@@ -200,7 +225,7 @@ export default function CommanderPrintCarousel({
         })}
       </div>
 
-      <div className="mt-2 text-center">
+      <div className="mt-1 text-center">
         <p className="text-xs uppercase tracking-[0.14em] text-white/45">
           {selected.set_name}
           {selected.released_at
@@ -214,7 +239,7 @@ export default function CommanderPrintCarousel({
               <button
                 key={print.id}
                 type="button"
-                onClick={() => goTo(index)}
+                onClick={() => setCurrent(index)}
                 aria-label={`Ver versão ${print.set_name}`}
                 className={`
                   h-2
