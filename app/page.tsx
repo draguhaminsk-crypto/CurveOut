@@ -1,5 +1,9 @@
 import { Cinzel } from "next/font/google";
 
+import CommanderPrintCarousel, {
+  CommanderPrint,
+} from "./components/CommanderPrintCarousel";
+
 const cinzel = Cinzel({
   subsets: ["latin"],
   display: "swap",
@@ -7,13 +11,27 @@ const cinzel = Cinzel({
 
 type Commander = {
   name: string;
+  printed_name?: string;
+
   type_line: string;
+  printed_type_line?: string;
+
   oracle_text?: string;
+  printed_text?: string;
+
   image_uris?: {
     normal?: string;
     large?: string;
   };
+
   card_faces?: {
+    name?: string;
+    printed_name?: string;
+    oracle_text?: string;
+    printed_text?: string;
+    type_line?: string;
+    printed_type_line?: string;
+
     image_uris?: {
       normal?: string;
       large?: string;
@@ -21,24 +39,40 @@ type Commander = {
   }[];
 };
 
+const scryfallHeaders = {
+  Accept: "application/json;q=0.9,*/*;q=0.8",
+  "User-Agent": "CurveOut/0.1",
+};
+
 async function getRandomCommander(): Promise<Commander | null> {
   try {
-    const response = await fetch(
-      "https://api.scryfall.com/cards/random?q=is%3Acommander",
+    // Primeiro tenta trazer um comandante com impressão em português.
+    const ptResponse = await fetch(
+      "https://api.scryfall.com/cards/random?q=is%3Acommander+lang%3Apt",
       {
         cache: "no-store",
-        headers: {
-          Accept: "application/json;q=0.9,*/*;q=0.8",
-          "User-Agent": "CurveOut/0.1",
-        },
+        headers: scryfallHeaders,
       }
     );
 
-    if (!response.ok) {
+    if (ptResponse.ok) {
+      return ptResponse.json();
+    }
+
+    // Se não funcionar, usa o catálogo geral.
+    const enResponse = await fetch(
+      "https://api.scryfall.com/cards/random?q=is%3Acommander",
+      {
+        cache: "no-store",
+        headers: scryfallHeaders,
+      }
+    );
+
+    if (!enResponse.ok) {
       return null;
     }
 
-    return response.json();
+    return enResponse.json();
   } catch {
     return null;
   }
@@ -47,18 +81,43 @@ async function getRandomCommander(): Promise<Commander | null> {
 export default async function Home() {
   const commander = await getRandomCommander();
 
-const commanderImage =
-  commander?.image_uris?.large ??
-  commander?.image_uris?.normal ??
-  commander?.card_faces?.[0]?.image_uris?.large ??
-  commander?.card_faces?.[0]?.image_uris?.normal;
+  const commanderName =
+    commander?.printed_name ??
+    commander?.card_faces?.[0]?.printed_name ??
+    commander?.name ??
+    "Comandante";
+
+  const commanderType =
+    commander?.printed_type_line ??
+    commander?.card_faces?.[0]?.printed_type_line ??
+    commander?.type_line ??
+    "";
+
+  const commanderText =
+    commander?.printed_text ??
+    commander?.card_faces?.[0]?.printed_text ??
+    commander?.oracle_text ??
+    commander?.card_faces?.[0]?.oracle_text ??
+    "";
+
+  const commanderImage =
+    commander?.image_uris?.large ??
+    commander?.image_uris?.normal ??
+    commander?.card_faces?.[0]?.image_uris?.large ??
+    commander?.card_faces?.[0]?.image_uris?.normal;
+
+  const ligaMagicUrl = commander
+    ? `https://www.ligamagic.com.br/?view=cards%2Fsearch&card=${encodeURIComponent(
+        commander.name
+      )}`
+    : "#";
 
   return (
     <div className="min-h-screen bg-[#0b0b0d] text-[#f4f1e8]">
       <header className="flex h-20 items-center justify-between border-b border-white/10 px-6 md:px-10">
         <a
           href="/"
-          className={`${cinzel.className} text-2xl font-bold uppercase tracking-[-0.04em]`}
+          className={`${cinzel.className} text-2xl font-bold uppercase tracking-[0.015em]`}
         >
           CurveOut
         </a>
@@ -94,101 +153,115 @@ const commanderImage =
 
       <main>
         <section className="relative flex min-h-[calc(100vh-80px)] items-center justify-center overflow-hidden px-6 md:px-10">
-  <div
-    className="absolute inset-0 bg-cover bg-center bg-no-repeat opacity-20"
-    style={{
-      backgroundImage: "url('/hero-bg.jpg')",
-    }}
-  />
-
-  <div className="absolute inset-0 bg-black/55" />
-
-  <div className="relative z-10 flex w-full max-w-7xl flex-col items-center text-center">
-    <h1
-      className={`${cinzel.className} text-[16vw] font-bold uppercase leading-[0.78] tracking-[-0.055em] md:text-[12vw]`}
-    >
-      <span>CURVE</span>
-
-    <span className="text-white/35">
-    <span
-  className="inline-block"
-  style={{
-    transform: "skewX(-12deg)",
-    transformOrigin: "center",
-  }}
->
-  O
-</span>
-    <span>UT</span>
-     </span>
-    </h1>
-
-    <div className="mt-10 flex flex-wrap justify-center gap-3">
-      <button className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white">
-        Criar meu deck
-      </button>
-
-      <button className="rounded-lg border border-white/15 px-6 py-3 font-medium text-white/75 transition hover:border-white/30 hover:text-white">
-        Explorar decks
-      </button>
-    </div>
-  </div>
-</section>
-
-        <section className="border-t border-white/10 px-6 py-20 md:px-10">
-  <div className="mb-10">
-    <p className="mb-2 text-xs uppercase tracking-[0.2em] text-white/35">
-      Descobrir
-    </p>
-
-    <h2
-      className={`${cinzel.className} text-3xl font-semibold tracking-tight md:text-4xl`}
-    >
-      Comandante em destaque
-    </h2>
-  </div>
-
-  {commander ? (
-    <div className="grid items-center gap-10 md:grid-cols-[320px_1fr]">
-      <div>
-        {commanderImage && (
-          <img
-            src={commanderImage}
-            alt={commander.name}
-            className="w-full rounded-2xl"
+          <div
+            className="absolute inset-0 bg-cover bg-center bg-no-repeat opacity-20"
+            style={{
+              backgroundImage: "url('/hero-bg.jpg')",
+            }}
           />
-        )}
-      </div>
 
-      <div className="max-w-2xl">
-        <p className="mb-3 text-sm uppercase tracking-[0.15em] text-white/35">
-          {commander.type_line}
-        </p>
+          <div className="absolute inset-0 bg-black/60" />
 
-        <h3
-          className={`${cinzel.className} mb-6 text-4xl font-bold md:text-6xl`}
-        >
-          {commander.name}
-        </h3>
+          <div className="relative z-10 flex w-full max-w-[1500px] flex-col items-center text-center">
+            <h1
+  className={`${cinzel.className} flex items-end whitespace-nowrap text-[13vw] font-bold uppercase leading-none tracking-[0.01em] md:text-[10.2vw]`}
+>
+  <span>CURVE</span>
 
-        {commander.oracle_text && (
-          <p className="whitespace-pre-line text-base leading-8 text-white/55">
-            {commander.oracle_text}
-          </p>
-        )}
+  <span className="ml-[0.005em] text-white/35">
+    <span
+      className="inline-block"
+      style={{
+        transform: "skewX(-10deg)",
+        transformOrigin: "center",
+      }}
+    >
+      O
+    </span>
+    UT
+  </span>
+</h1>
 
-        <button className="mt-8 rounded-lg border border-white/15 px-6 py-3 font-medium text-white/75 transition hover:border-white/30 hover:text-white">
-          Ver comandante
-        </button>
-      </div>
-    </div>
-  ) : (
-    <p className="text-white/45">
-      Não foi possível carregar o comandante agora.
-    </p>
-  )}
-</section>
+            <div className="mt-10 flex flex-wrap justify-center gap-3">
+              <button className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white">
+                Criar meu deck
+              </button>
 
+              <button className="rounded-lg border border-white/15 px-6 py-3 font-medium text-white/75 transition hover:border-white/30 hover:text-white">
+                Explorar decks
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="border-t border-white/10 px-6 py-20 md:px-10 md:py-28">
+          <div className="mx-auto max-w-7xl">
+            <div className="mb-12">
+              <p className="mb-3 text-xs uppercase tracking-[0.22em] text-white/35">
+                Descobrir
+              </p>
+
+              <h2
+                className={`${cinzel.className} text-3xl font-semibold tracking-tight md:text-5xl`}
+              >
+                Comandante em destaque
+              </h2>
+            </div>
+
+            {commander ? (
+              <div className="grid items-center gap-10 md:grid-cols-[300px_1fr] lg:grid-cols-[340px_1fr]">
+                <div>
+                  {commanderImage ? (
+                    <img
+                      src={commanderImage}
+                      alt={commanderName}
+                      className="w-full rounded-2xl shadow-2xl"
+                    />
+                  ) : (
+                    <div className="aspect-[0.716] w-full rounded-2xl border border-white/10 bg-white/[0.03]" />
+                  )}
+                </div>
+
+                <div className="max-w-3xl">
+                  <p className="mb-4 text-sm uppercase tracking-[0.14em] text-white/35">
+                    {commanderType}
+                  </p>
+
+                  <h3
+                    className={`${cinzel.className} mb-6 text-4xl font-bold leading-tight md:text-6xl`}
+                  >
+                    {commanderName}
+                  </h3>
+
+                  {commanderText && (
+                    <p className="max-w-2xl whitespace-pre-line text-base leading-8 text-white/55 md:text-lg">
+                      {commanderText}
+                    </p>
+                  )}
+
+                  <div className="mt-8 flex flex-wrap gap-3">
+                    <button className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white">
+                      Criar deck com este comandante
+                    </button>
+
+                    <a
+                      href={ligaMagicUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-lg border border-white/15 px-6 py-3 font-medium text-white/75 transition hover:border-white/30 hover:text-white"
+                    >
+                      Ver preços na LigaMagic ↗
+                    </a>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-white/45">
+                Não foi possível carregar o comandante agora.
+              </p>
+            )}
+          </div>
+        </section>
       </main>
     </div>
   );
