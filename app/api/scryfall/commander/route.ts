@@ -37,6 +37,17 @@ type ScryfallCard = {
   }[];
 };
 
+const scryfallHeaders = {
+  Accept: "application/json;q=0.9,*/*;q=0.8",
+  "User-Agent": "CurveOut/0.1",
+};
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
 function getCardImage(card: ScryfallCard) {
   return (
     card.image_uris?.large ??
@@ -46,60 +57,99 @@ function getCardImage(card: ScryfallCard) {
   );
 }
 
-const headers = {
-  Accept: "application/json;q=0.9,*/*;q=0.8",
-  "User-Agent": "CurveOut/0.1",
-};
+function proxiedImageUrl(imageUrl: string | undefined, origin: string) {
+  if (!imageUrl) return undefined;
 
-async function getRandomCommander() {
+  return `${origin}/api/scryfall/image?url=${encodeURIComponent(imageUrl)}`;
+}
+
+function proxifyCard(card: ScryfallCard, origin: string): ScryfallCard {
+  return {
+    ...card,
+
+    image_uris: card.image_uris
+      ? {
+          normal: proxiedImageUrl(card.image_uris.normal, origin),
+          large: proxiedImageUrl(card.image_uris.large, origin),
+        }
+      : undefined,
+
+    card_faces: card.card_faces?.map((face) => ({
+      ...face,
+      image_uris: face.image_uris
+        ? {
+            normal: proxiedImageUrl(face.image_uris.normal, origin),
+            large: proxiedImageUrl(face.image_uris.large, origin),
+          }
+        : undefined,
+    })),
+  };
+}
+
+async function getRandomCommander(): Promise<ScryfallCard> {
   const portuguese = await fetch(
     "https://api.scryfall.com/cards/random?q=is%3Acommander+lang%3Apt",
     {
-      headers,
-      cache: "no-store",
+      headers: scryfallHeaders,
+      next: {
+        revalidate: 600,
+      },
     }
   );
 
   if (portuguese.ok) {
-    return (await portuguese.json()) as ScryfallCard;
+    return portuguese.json();
   }
 
   const english = await fetch(
     "https://api.scryfall.com/cards/random?q=is%3Acommander",
     {
-      headers,
-      cache: "no-store",
+      headers: scryfallHeaders,
+      next: {
+        revalidate: 600,
+      },
     }
   );
 
   if (!english.ok) {
-    throw new Error("Não foi possível carregar um comandante.");
+    throw new Error(`Scryfall respondeu com ${english.status}.`);
   }
 
-  return (await english.json()) as ScryfallCard;
+  return english.json();
 }
 
-export async function GET() {
+export function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
+}
+
+export async function GET(request: Request) {
   try {
-    const commander = await getRandomCommander();
+    const requestUrl = new URL(request.url);
+    const origin = requestUrl.origin;
 
-    const currentImage = getCardImage(commander);
+    const rawCommander = await getRandomCommander();
+    const commander = proxifyCard(rawCommander, origin);
 
-    const currentPrint = currentImage
+    const currentRawImage = getCardImage(rawCommander);
+
+    const currentPrint = currentRawImage
       ? {
-          id: commander.id,
-          set: commander.set,
-          set_name: commander.set_name,
-          released_at: commander.released_at,
-          image: currentImage,
+          id: rawCommander.id,
+          set: rawCommander.set,
+          set_name: rawCommander.set_name,
+          released_at: rawCommander.released_at,
+          image: proxiedImageUrl(currentRawImage, origin)!,
         }
       : null;
 
     let prints = currentPrint ? [currentPrint] : [];
 
-    if (commander.prints_search_uri) {
-      const response = await fetch(commander.prints_search_uri, {
-        headers,
+    if (rawCommander.prints_search_uri) {
+      const response = await fetch(rawCommander.prints_search_uri, {
+        headers: scryfallHeaders,
         next: {
           revalidate: 3600,
         },
@@ -123,7 +173,7 @@ export async function GET() {
               set: card.set,
               set_name: card.set_name,
               released_at: card.released_at,
-              image,
+              image: proxiedImageUrl(image, origin)!,
             };
           })
           .filter(
@@ -149,10 +199,18 @@ export async function GET() {
       }
     }
 
-    return Response.json({
-      commander,
-      prints,
-    });
+    return Response.json(
+      {
+        commander,
+        prints,
+      },
+      {
+        headers: {
+          ...corsHeaders,
+          "Cache-Control": "public, max-age=60, s-maxage=600",
+        },
+      }
+    );
   } catch (error) {
     console.error("Erro no proxy do Scryfall:", error);
 
@@ -162,6 +220,7 @@ export async function GET() {
       },
       {
         status: 502,
+        headers: corsHeaders,
       }
     );
   }
