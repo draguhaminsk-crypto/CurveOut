@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase/client";
 
 type Deck = {
@@ -11,6 +11,7 @@ type Deck = {
   name: string;
   format: string;
   is_public: boolean;
+  description: string | null;
   commander_scryfall_id: string | null;
   created_at: string;
   updated_at: string;
@@ -30,6 +31,139 @@ const formats = [
   "Outro",
 ];
 
+
+type ImportBoard =
+  | "mainboard"
+  | "commander"
+  | "sideboard"
+  | "maybeboard";
+
+type ImportedCardLine = {
+  quantity: number;
+  name: string;
+  board: ImportBoard;
+  original: string;
+};
+
+type ParsedImport = {
+  cards: ImportedCardLine[];
+  invalidLines: string[];
+  totalCopies: number;
+};
+
+function truncateText(text: string, maxLength = 500) {
+  const cleanText = text.trim();
+
+  if (cleanText.length <= maxLength) {
+    return cleanText;
+  }
+
+  return `${cleanText.slice(0, maxLength).trimEnd()}...`;
+}
+
+function parseImportList(value: string): ParsedImport {
+  const lines = value.split(/\r?\n/);
+
+  const cards: ImportedCardLine[] = [];
+  const invalidLines: string[] = [];
+
+  let currentBoard: ImportBoard = "mainboard";
+
+  const sectionMap: Record<string, ImportBoard> = {
+    commander: "commander",
+    commanders: "commander",
+    "command zone": "commander",
+    mainboard: "mainboard",
+    deck: "mainboard",
+    maindeck: "mainboard",
+    creatures: "mainboard",
+    creature: "mainboard",
+    artifacts: "mainboard",
+    artifact: "mainboard",
+    enchantments: "mainboard",
+    enchantment: "mainboard",
+    instants: "mainboard",
+    instant: "mainboard",
+    sorceries: "mainboard",
+    sorcery: "mainboard",
+    lands: "mainboard",
+    land: "mainboard",
+    planeswalkers: "mainboard",
+    planeswalker: "mainboard",
+    sideboard: "sideboard",
+    "side board": "sideboard",
+    maybeboard: "maybeboard",
+    "maybe board": "maybeboard",
+    considering: "maybeboard",
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    if (!line) continue;
+
+    const normalizedHeading = line
+      .replace(/[:：]$/, "")
+      .trim()
+      .toLocaleLowerCase("en-US");
+
+    if (sectionMap[normalizedHeading]) {
+      currentBoard = sectionMap[normalizedHeading];
+      continue;
+    }
+
+    // Aceita:
+    // 1 Sol Ring
+    // 1x Sol Ring
+    // 1 x Sol Ring
+    // 4 Lightning Bolt (M11) 149
+    // 1 Sol Ring [CMM]
+    const match = line.match(/^(\d+)\s*[xX]?\s+(.+)$/);
+
+    if (!match) {
+      invalidLines.push(line);
+      continue;
+    }
+
+    const quantity = Number(match[1]);
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      invalidLines.push(line);
+      continue;
+    }
+
+    let cardName = match[2].trim();
+
+    // Remove informações comuns de impressão no fim da linha:
+    // (SET) 123 / [SET] / (SET)
+    cardName = cardName
+      .replace(/\s+\([A-Za-z0-9]{2,8}\)\s+\S+$/u, "")
+      .replace(/\s+\[[A-Za-z0-9]{2,8}\]\s*$/u, "")
+      .replace(/\s+\([A-Za-z0-9]{2,8}\)\s*$/u, "")
+      .trim();
+
+    if (!cardName) {
+      invalidLines.push(line);
+      continue;
+    }
+
+    cards.push({
+      quantity,
+      name: cardName,
+      board: currentBoard,
+      original: line,
+    });
+  }
+
+  return {
+    cards,
+    invalidLines,
+    totalCopies: cards.reduce(
+      (total, card) => total + card.quantity,
+      0
+    ),
+  };
+}
 
 type CurveOutSelectProps = {
   value: string;
@@ -149,6 +283,7 @@ function CurveOutSelect({
 
 export default function DeckPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const [supabase] = useState(() => createClient());
 
   const [deck, setDeck] = useState<Deck | null>(null);
@@ -162,6 +297,7 @@ export default function DeckPage() {
   const [name, setName] = useState("");
   const [format, setFormat] = useState("Commander");
   const [isPublic, setIsPublic] = useState(true);
+  const [description, setDescription] = useState("");
 
   const [cardSearch, setCardSearch] = useState("");
   const [deckSearch, setDeckSearch] = useState("");
@@ -171,8 +307,21 @@ export default function DeckPage() {
   const [deckArt, setDeckArt] = useState("/hero-bg.jpg");
 
   const [updateDeckOpen, setUpdateDeckOpen] = useState(false);
+  const [importDeckOpen, setImportDeckOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [exportDeckOpen, setExportDeckOpen] = useState(false);
+  const [exportCopied, setExportCopied] = useState(false);
+  const [shareDeckOpen, setShareDeckOpen] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+  const [deleteDeckOpen, setDeleteDeckOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
   const priceMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const parsedImport = useMemo(
+    () => parseImportList(importText),
+    [importText]
+  );
 
   useEffect(() => {
     async function loadDeck() {
@@ -186,7 +335,7 @@ export default function DeckPage() {
       const { data, error } = await supabase
         .from("decks")
         .select(
-          "id, owner_id, name, format, is_public, commander_scryfall_id, created_at, updated_at"
+          "id, owner_id, name, format, is_public, description, commander_scryfall_id, created_at, updated_at"
         )
         .eq("id", params.id)
         .maybeSingle();
@@ -208,6 +357,7 @@ export default function DeckPage() {
       setName(data.name);
       setFormat(data.format);
       setIsPublic(data.is_public);
+      setDescription(data.description ?? "");
 
       setIsOwner(Boolean(user && user.id === data.owner_id));
 
@@ -304,6 +454,7 @@ export default function DeckPage() {
     setName(deck.name);
     setFormat(deck.format);
     setIsPublic(deck.is_public);
+    setDescription(deck.description ?? "");
     setErrorMessage("");
     setEditing(true);
   }
@@ -314,6 +465,7 @@ export default function DeckPage() {
     setName(deck.name);
     setFormat(deck.format);
     setIsPublic(deck.is_public);
+    setDescription(deck.description ?? "");
     setErrorMessage("");
     setEditing(false);
   }
@@ -331,13 +483,17 @@ export default function DeckPage() {
     setSaving(true);
     setErrorMessage("");
 
+    const cleanDescription = description.trim() || null;
+    const updatedAt = new Date().toISOString();
+
     const { error } = await supabase
       .from("decks")
       .update({
         name: cleanName,
         format,
         is_public: isPublic,
-        updated_at: new Date().toISOString(),
+        description: cleanDescription,
+        updated_at: updatedAt,
       })
       .eq("id", deck.id)
       .eq("owner_id", deck.owner_id);
@@ -354,11 +510,132 @@ export default function DeckPage() {
       name: cleanName,
       format,
       is_public: isPublic,
-      updated_at: new Date().toISOString(),
+      description: cleanDescription,
+      updated_at: updatedAt,
     });
 
     setEditing(false);
     setSaving(false);
+  }
+
+  const exportText = useMemo(() => {
+    if (!deck) return "";
+
+    const lines = [
+      deck.name,
+      `Formato: ${deck.format}`,
+      `Visibilidade: ${deck.is_public ? "Público" : "Privado"}`,
+    ];
+
+    if (deck.description) {
+      lines.push("", `Notas: ${deck.description}`);
+    }
+
+    lines.push(
+      "",
+      "Deck",
+      "",
+      "Nenhuma carta adicionada ainda."
+    );
+
+    return lines.join("\n");
+  }, [deck]);
+
+  const clipboardDeckText = useMemo(() => {
+    // Quando deck_cards estiver ligado, este texto será montado no formato:
+    // 1 Sol Ring
+    // 1 Arcane Signet
+    // 4 Forest
+    //
+    // Por enquanto o deck está sem cartas.
+    return "";
+  }, []);
+
+  async function copyExportText() {
+    try {
+      const textToCopy =
+        clipboardDeckText ||
+        "Nenhuma carta adicionada ao deck ainda.";
+
+      await navigator.clipboard.writeText(textToCopy);
+      setExportCopied(true);
+
+      window.setTimeout(() => {
+        setExportCopied(false);
+      }, 1800);
+    } catch (error) {
+      console.error("Erro ao copiar deck:", error);
+      setErrorMessage("Não foi possível copiar o deck.");
+    }
+  }
+
+  function downloadExportText() {
+    if (!deck) return;
+
+    const safeName =
+      deck.name
+        .trim()
+        .replace(/[<>:"/\\|?*]+/g, "-")
+        .replace(/\s+/g, "-")
+        .toLocaleLowerCase("pt-BR") || "deck";
+
+    const blob = new Blob([exportText], {
+      type: "text/plain;charset=utf-8",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = `${safeName}.txt`;
+
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyShareLink() {
+    if (!deck) return;
+
+    try {
+      const shareUrl = `${window.location.origin}/decks/${deck.id}`;
+
+      await navigator.clipboard.writeText(shareUrl);
+      setShareCopied(true);
+
+      window.setTimeout(() => {
+        setShareCopied(false);
+      }, 1800);
+    } catch (error) {
+      console.error("Erro ao copiar link:", error);
+      setErrorMessage("Não foi possível copiar o link do deck.");
+    }
+  }
+
+  async function deleteDeck() {
+    if (!deck || !isOwner) return;
+
+    setDeleting(true);
+    setErrorMessage("");
+
+    const { error } = await supabase
+      .from("decks")
+      .delete()
+      .eq("id", deck.id)
+      .eq("owner_id", deck.owner_id);
+
+    if (error) {
+      console.error("Erro ao excluir deck:", error);
+      setErrorMessage(`Erro: ${error.message}`);
+      setDeleting(false);
+      setDeleteDeckOpen(false);
+      return;
+    }
+
+    router.push("/meus-decks");
+    router.refresh();
   }
 
   if (loading) {
@@ -390,13 +667,23 @@ export default function DeckPage() {
 
   return (
     <main className="min-h-screen bg-[#0b0b0d] px-3 py-8 text-[#f4f1e8] md:px-4 xl:px-5">
-      <div className="w-full">
-        <Link
-          href="/meus-decks"
-          className="text-sm text-white/40 transition hover:text-white"
-        >
-          ← Meus decks
-        </Link>
+      <div className={editing ? "mx-auto w-full max-w-4xl" : "w-full"}>
+        {editing ? (
+          <button
+            type="button"
+            onClick={cancelEditing}
+            className="text-sm text-white/40 transition hover:text-white"
+          >
+            ← Voltar para o deck
+          </button>
+        ) : (
+          <Link
+            href={isOwner ? "/meus-decks" : "/"}
+            className="text-sm text-white/40 transition hover:text-white"
+          >
+            {isOwner ? "← Meus decks" : "← CurveOut"}
+          </Link>
+        )}
 
         <header className="relative mt-10 overflow-visible border-b border-white/10 pb-16">
           {!editing && (
@@ -427,6 +714,25 @@ export default function DeckPage() {
 
                 <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-white/40">
                   <span>{deck.is_public ? "Público" : "Privado"}</span>
+
+                  {!isOwner && (
+                    <>
+                      <span>•</span>
+
+                      <span
+                        className="
+                          rounded-full
+                          border border-white/10
+                          bg-black/20
+                          px-2.5 py-1
+                          text-[11px]
+                          text-white/35
+                        "
+                      >
+                        Modo leitura
+                      </span>
+                    </>
+                  )}
 
                   <span>•</span>
 
@@ -509,11 +815,101 @@ export default function DeckPage() {
                   </div>
                 </div>
 
-                {isOwner && (
-                  <div className="mt-5 flex flex-wrap gap-2">
+                <p className="mt-3 text-xs text-white/25">
+                  Atualizado em{" "}
+                  {new Intl.DateTimeFormat("pt-BR", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  }).format(new Date(deck.updated_at))}
+                </p>
+
+                {deck.description && (
+                  <p
+                    className="
+                      mt-4 max-w-3xl
+                      whitespace-pre-wrap
+                      break-words
+                      [overflow-wrap:anywhere]
+                      text-sm leading-6
+                      text-white/45
+                    "
+                  >
+                    {truncateText(deck.description, 500)}
+                  </p>
+                )}
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  {isOwner && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={startEditing}
+                        className="
+                          rounded-lg
+                          border border-white/15
+                          bg-black/20
+                          px-4 py-2
+                          text-sm text-white/60
+                          backdrop-blur-sm
+                          transition
+                          hover:border-white/30
+                          hover:bg-black/30
+                          hover:text-white
+                        "
+                      >
+                        Editar deck
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setImportDeckOpen(true)}
+                        className="
+                          rounded-lg
+                          border border-white/15
+                          bg-black/20
+                          px-4 py-2
+                          text-sm text-white/60
+                          backdrop-blur-sm
+                          transition
+                          hover:border-white/30
+                          hover:bg-black/30
+                          hover:text-white
+                        "
+                      >
+                        Importar deck
+                      </button>
+                    </>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExportCopied(false);
+                      setExportDeckOpen(true);
+                    }}
+                    className="
+                      rounded-lg
+                      border border-white/15
+                      bg-black/20
+                      px-4 py-2
+                      text-sm text-white/60
+                      backdrop-blur-sm
+                      transition
+                      hover:border-white/30
+                      hover:bg-black/30
+                      hover:text-white
+                    "
+                  >
+                    Exportar
+                  </button>
+
+                  {(deck.is_public || isOwner) && (
                     <button
                       type="button"
-                      onClick={startEditing}
+                      onClick={() => {
+                        setShareCopied(false);
+                        setShareDeckOpen(true);
+                      }}
                       className="
                         rounded-lg
                         border border-white/15
@@ -527,45 +923,11 @@ export default function DeckPage() {
                         hover:text-white
                       "
                     >
-                      Editar deck
+                      Compartilhar
                     </button>
+                  )}
 
-                    <button
-                      type="button"
-                      className="
-                        rounded-lg
-                        border border-white/15
-                        bg-black/20
-                        px-4 py-2
-                        text-sm text-white/60
-                        backdrop-blur-sm
-                        transition
-                        hover:border-white/30
-                        hover:bg-black/30
-                        hover:text-white
-                      "
-                    >
-                      Importar deck
-                    </button>
-
-                    <button
-                      type="button"
-                      className="
-                        rounded-lg
-                        border border-white/15
-                        bg-black/20
-                        px-4 py-2
-                        text-sm text-white/60
-                        backdrop-blur-sm
-                        transition
-                        hover:border-white/30
-                        hover:bg-black/30
-                        hover:text-white
-                      "
-                    >
-                      Exportar
-                    </button>
-
+                  {isOwner && (
                     <button
                       type="button"
                       onClick={() => setUpdateDeckOpen(true)}
@@ -582,12 +944,12 @@ export default function DeckPage() {
                     >
                       Atualizar deck
                     </button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           ) : (
-            <div className="max-w-3xl">
+            <div className="mx-auto w-full max-w-3xl">
               <p className="text-xs uppercase tracking-[0.22em] text-white/30">
                 Editar deck
               </p>
@@ -687,6 +1049,42 @@ export default function DeckPage() {
                 </div>
               </div>
 
+              <div className="mt-7">
+                <label
+                  htmlFor="deck-description"
+                  className="text-sm font-medium text-white/70"
+                >
+                  Notas do deck
+                </label>
+
+                <textarea
+                  id="deck-description"
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  maxLength={500}
+                  rows={5}
+                  placeholder="Ex: testar menos terrenos, trocar pacote de remoções..."
+                  className="
+                    mt-3
+                    w-full
+                    resize-none
+                    rounded-xl
+                    border border-white/10
+                    bg-white/[0.035]
+                    px-4 py-3.5
+                    text-[#f4f1e8]
+                    outline-none
+                    transition
+                    placeholder:text-white/20
+                    focus:border-white/30
+                  "
+                />
+
+                <div className="mt-2 text-right text-xs text-white/20">
+                  {description.length}/500
+                </div>
+              </div>
+
               {errorMessage && (
                 <p className="mt-6 text-sm text-red-300">
                   {errorMessage}
@@ -694,22 +1092,6 @@ export default function DeckPage() {
               )}
 
               <div className="mt-8 flex flex-wrap justify-end gap-3 border-t border-white/10 pt-7">
-                <button
-                  type="button"
-                  onClick={cancelEditing}
-                  disabled={saving}
-                  className="
-                    rounded-lg
-                    px-5 py-2.5
-                    text-sm text-white/45
-                    transition
-                    hover:text-white
-                    disabled:opacity-40
-                  "
-                >
-                  Cancelar
-                </button>
-
                 <button
                   type="button"
                   onClick={saveDeck}
@@ -729,6 +1111,43 @@ export default function DeckPage() {
                   {saving ? "Salvando..." : "Salvar alterações"}
                 </button>
               </div>
+
+              <div className="mt-10 rounded-xl border border-red-400/15 bg-red-400/[0.03] p-5">
+                <p className="text-xs uppercase tracking-[0.18em] text-red-300/60">
+                  Zona de perigo
+                </p>
+
+                <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-white/70">
+                      Excluir deck
+                    </p>
+
+                    <p className="mt-1 max-w-xl text-sm leading-6 text-white/30">
+                      Exclui este deck permanentemente. Esta ação não pode ser
+                      desfeita.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeleteDeckOpen(true)}
+                    className="
+                      shrink-0
+                      rounded-lg
+                      border border-red-300/20
+                      px-4 py-2.5
+                      text-sm text-red-200/70
+                      transition
+                      hover:border-red-300/40
+                      hover:bg-red-300/[0.06]
+                      hover:text-red-100
+                    "
+                  >
+                    Excluir deck
+                  </button>
+                </div>
+              </div>
             </div>
           )}
           </div>
@@ -744,9 +1163,19 @@ export default function DeckPage() {
           <section className="pt-10 pb-8">
             {/* BARRA DO DECK */}
             <div className="rounded-2xl border border-white/10 bg-white/[0.015]">
-              <div className="grid gap-3 border-b border-white/10 p-3 xl:grid-cols-[1.5fr_0.75fr_0.75fr_1.25fr]">
+              <div
+                className={`
+                  grid gap-3 border-b border-white/10 p-3
+                  ${
+                    isOwner
+                      ? "xl:grid-cols-[1.5fr_0.75fr_0.75fr_1.25fr]"
+                      : "xl:grid-cols-[0.75fr_0.75fr_1.5fr]"
+                  }
+                `}
+              >
                 {/* PROCURAR / ADICIONAR CARTA */}
-                <div>
+                {isOwner && (
+                  <div>
                   <label
                     htmlFor="card-search"
                     className="mb-2 block px-1 text-[11px] uppercase tracking-[0.16em] text-white/25"
@@ -778,6 +1207,7 @@ export default function DeckPage() {
                     </span>
                   </div>
                 </div>
+                )}
 
                 {/* ORGANIZAR POR */}
                 <div>
@@ -857,11 +1287,15 @@ export default function DeckPage() {
               <div className="min-h-[420px] px-5 py-10 md:px-6 lg:px-8">
                 <div className="max-w-xl">
                   <p className="text-lg text-white/55">
-                    Seu deck está vazio.
+                    {isOwner
+                      ? "Seu deck está vazio."
+                      : "Este deck está vazio."}
                   </p>
 
                   <p className="mt-2 text-sm leading-6 text-white/30">
-                    Adicione cartas para começar a montar o deck.
+                    {isOwner
+                      ? "Adicione cartas para começar a montar o deck."
+                      : "O autor ainda não adicionou cartas a este deck."}
                   </p>
 
                   {isOwner && (
@@ -888,7 +1322,693 @@ export default function DeckPage() {
         )}
       </div>
 
-      {updateDeckOpen && (
+      {shareDeckOpen && (
+        <div
+          className="
+            fixed inset-0 z-[80]
+            flex items-center justify-center
+            bg-black/80
+            px-4 py-6
+            backdrop-blur-sm
+          "
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setShareDeckOpen(false);
+            }
+          }}
+        >
+          <div
+            className="
+              w-full max-w-xl
+              overflow-hidden
+              rounded-2xl
+              border border-white/15
+              bg-[#0f0f12]
+              shadow-2xl
+            "
+          >
+            <div className="flex items-start justify-between gap-6 border-b border-white/10 px-6 py-5">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-white/30">
+                  Compartilhar
+                </p>
+
+                <h2 className="mt-2 text-2xl font-semibold">
+                  Link do deck
+                </h2>
+
+                <p className="mt-2 text-sm leading-6 text-white/40">
+                  Copie o endereço desta página para enviar o deck para outra
+                  pessoa.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShareDeckOpen(false)}
+                className="
+                  rounded-lg
+                  border border-white/10
+                  px-3 py-2
+                  text-sm text-white/45
+                  transition
+                  hover:border-white/25
+                  hover:text-white
+                "
+              >
+                Fechar
+              </button>
+            </div>
+
+            <div className="p-6">
+              <div
+                className={`
+                  rounded-xl
+                  border p-4
+                  ${
+                    deck.is_public
+                      ? "border-white/10 bg-white/[0.025]"
+                      : "border-amber-200/10 bg-amber-200/[0.025]"
+                  }
+                `}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-white/75">
+                      {deck.is_public ? "Deck público" : "Deck privado"}
+                    </p>
+
+                    <p className="mt-1 text-sm leading-6 text-white/35">
+                      {deck.is_public
+                        ? "Qualquer pessoa com este link poderá visualizar o deck em modo leitura."
+                        : "Somente você consegue abrir este deck. O link não libera acesso enquanto ele estiver privado."}
+                    </p>
+                  </div>
+
+                  <span
+                    className="
+                      shrink-0 rounded-full
+                      border border-white/10
+                      px-2.5 py-1
+                      text-[11px] text-white/35
+                    "
+                  >
+                    {deck.is_public ? "Público" : "Privado"}
+                  </span>
+                </div>
+
+                {!deck.is_public && isOwner && (
+                  <p className="mt-3 border-t border-white/10 pt-3 text-xs leading-5 text-white/25">
+                    Para compartilhar com outras pessoas, use “Editar deck” e
+                    altere a visibilidade para Público.
+                  </p>
+                )}
+              </div>
+
+              <div className="mt-4">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-white/20">
+                  Endereço
+                </p>
+
+                <div
+                  className="
+                    mt-2 flex items-center gap-3
+                    rounded-xl
+                    border border-white/10
+                    bg-[#0b0b0d]
+                    px-4 py-3
+                  "
+                >
+                  <p className="min-w-0 flex-1 truncate font-mono text-xs text-white/40">
+                    {typeof window !== "undefined"
+                      ? `${window.location.origin}/decks/${deck.id}`
+                      : `/decks/${deck.id}`}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end border-t border-white/10 px-6 py-5">
+              <button
+                type="button"
+                onClick={copyShareLink}
+                className="
+                  rounded-lg
+                  bg-[#f4f1e8]
+                  px-5 py-2.5
+                  text-sm font-semibold
+                  text-black
+                  transition
+                  hover:bg-white
+                "
+              >
+                {shareCopied ? "Link copiado!" : "Copiar link"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {exportDeckOpen && (
+        <div
+          className="
+            fixed inset-0 z-[75]
+            flex items-center justify-center
+            overflow-y-auto
+            bg-black/80
+            px-4 py-6
+            backdrop-blur-sm
+          "
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setExportDeckOpen(false);
+            }
+          }}
+        >
+          <div
+            className="
+              flex max-h-[92vh] w-full max-w-3xl
+              flex-col overflow-hidden
+              rounded-2xl
+              border border-white/15
+              bg-[#0f0f12]
+              shadow-2xl
+            "
+          >
+            <div className="flex items-start justify-between gap-6 border-b border-white/10 px-6 py-5 md:px-8">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-white/30">
+                  Compartilhar lista
+                </p>
+
+                <h2 className="mt-2 text-2xl font-semibold md:text-3xl">
+                  Exportar deck
+                </h2>
+
+                <p className="mt-2 max-w-xl text-sm leading-6 text-white/40">
+                  Copie apenas a lista no formato “1 Carta” para colar em outro
+                  deckbuilder, ou baixe um arquivo .txt.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setExportDeckOpen(false)}
+                className="
+                  rounded-lg
+                  border border-white/10
+                  px-3 py-2
+                  text-sm text-white/45
+                  transition
+                  hover:border-white/25
+                  hover:text-white
+                "
+              >
+                Fechar
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-6 md:p-8">
+              <div
+                className="
+                  overflow-hidden
+                  rounded-xl
+                  border border-white/10
+                  bg-[#0b0b0d]
+                "
+              >
+                <div className="flex items-center justify-between gap-4 border-b border-white/10 px-4 py-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.16em] text-white/25">
+                      Lista simples
+                    </p>
+
+                    <p className="mt-1 text-xs text-white/20">
+                      Formato de texto compatível com copiar e colar.
+                    </p>
+                  </div>
+
+                  <span className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-white/30">
+                    0 cartas
+                  </span>
+                </div>
+
+                <pre
+                  className="
+                    max-h-[420px]
+                    overflow-auto
+                    whitespace-pre-wrap
+                    break-words
+                    p-4
+                    font-mono
+                    text-sm leading-6
+                    text-white/60
+                  "
+                >
+                  {exportText}
+                </pre>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-white/20">
+                  Copiar cartas
+                </p>
+
+                <p className="mt-2 text-xs leading-5 text-white/35">
+                  O botão “Copiar cartas” coloca somente as cartas na área de
+                  transferência, uma por linha, no formato:
+                </p>
+
+                <pre className="mt-3 font-mono text-xs leading-5 text-white/50">{`1 Sol Ring
+1 Arcane Signet
+4 Forest`}</pre>
+              </div>
+
+              <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">
+                <p className="text-xs leading-5 text-white/25">
+                  O deck ainda está vazio. Quando as cartas estiverem ligadas
+                  ao deck, esta exportação passará a incluir automaticamente
+                  quantidade, nome e seções como Commander, Deck e Sideboard.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-white/10 px-6 py-5 sm:flex-row sm:items-center sm:justify-end md:px-8">
+              <button
+                type="button"
+                onClick={downloadExportText}
+                className="
+                  rounded-lg
+                  border border-white/15
+                  px-4 py-2.5
+                  text-sm text-white/55
+                  transition
+                  hover:border-white/30
+                  hover:text-white
+                "
+              >
+                Baixar .txt
+              </button>
+
+              <button
+                type="button"
+                onClick={copyExportText}
+                className="
+                  rounded-lg
+                  bg-[#f4f1e8]
+                  px-5 py-2.5
+                  text-sm font-semibold
+                  text-black
+                  transition
+                  hover:bg-white
+                "
+              >
+                {exportCopied ? "Copiado!" : "Copiar cartas"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isOwner && importDeckOpen && (
+        <div
+          className="
+            fixed inset-0 z-[70]
+            flex items-center justify-center
+            bg-black/80
+            px-4 py-6
+            backdrop-blur-sm
+          "
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setImportDeckOpen(false);
+            }
+          }}
+        >
+          <div
+            className="
+              flex max-h-[92vh] w-full max-w-6xl
+              flex-col overflow-hidden
+              rounded-2xl
+              border border-white/15
+              bg-[#0f0f12]
+              shadow-2xl
+            "
+          >
+            {/* CABEÇALHO */}
+            <div className="flex items-start justify-between gap-6 border-b border-white/10 px-6 py-5 md:px-8">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-white/30">
+                  Lista de cartas
+                </p>
+
+                <h2 className="mt-2 text-2xl font-semibold md:text-3xl">
+                  Importar deck
+                </h2>
+
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-white/40">
+                  Cole uma lista de cartas. O CurveOut já separa quantidade,
+                  nome e seções comuns antes de consultar as cartas.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setImportDeckOpen(false)}
+                className="
+                  rounded-lg
+                  border border-white/10
+                  px-3 py-2
+                  text-sm text-white/45
+                  transition
+                  hover:border-white/25
+                  hover:text-white
+                "
+              >
+                Fechar
+              </button>
+            </div>
+
+            <div className="grid min-h-0 flex-1 lg:grid-cols-[1fr_0.9fr]">
+              {/* COLAR LISTA */}
+              <div className="border-b border-white/10 p-6 lg:border-b-0 lg:border-r lg:p-8">
+                <div className="flex items-end justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-white/70">
+                      Cole sua lista
+                    </p>
+
+                    <p className="mt-1 text-xs text-white/25">
+                      Exemplos: 1 Sol Ring, 1x Arcane Signet, 4 Lightning Bolt
+                    </p>
+                  </div>
+
+                  {importText && (
+                    <button
+                      type="button"
+                      onClick={() => setImportText("")}
+                      className="text-xs text-white/35 transition hover:text-white"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
+
+                <textarea
+                  value={importText}
+                  onChange={(event) => setImportText(event.target.value)}
+                  placeholder={`Commander
+1 Atraxa, Praetors' Voice
+
+Deck
+1 Sol Ring
+1 Arcane Signet
+1 Command Tower
+4 Forest
+
+Sideboard
+1 Negate`}
+                  spellCheck={false}
+                  className="
+                    mt-4
+                    min-h-[430px] w-full
+                    resize-none
+                    rounded-xl
+                    border border-white/10
+                    bg-[#0b0b0d]
+                    p-4
+                    font-mono text-sm leading-6
+                    text-white/75
+                    outline-none
+                    transition
+                    placeholder:text-white/18
+                    focus:border-white/25
+                  "
+                />
+
+                <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-white/25">
+                  <span>
+                    {parsedImport.cards.length} nomes reconhecidos
+                  </span>
+
+                  <span>
+                    {parsedImport.totalCopies} cartas no total
+                  </span>
+
+                  {parsedImport.invalidLines.length > 0 && (
+                    <span className="text-amber-200/50">
+                      {parsedImport.invalidLines.length} linhas não reconhecidas
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* PRÉVIA */}
+              <div className="min-h-0 p-6 lg:p-8">
+                <div className="flex items-end justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-white/70">
+                      Prévia da importação
+                    </p>
+
+                    <p className="mt-1 text-xs text-white/25">
+                      Ainda não consultamos o Scryfall nesta etapa.
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-2xl font-semibold text-white/80">
+                      {parsedImport.totalCopies}
+                    </p>
+
+                    <p className="text-[10px] uppercase tracking-[0.16em] text-white/20">
+                      cartas
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-5 max-h-[470px] overflow-y-auto pr-1">
+                  {parsedImport.cards.length === 0 ? (
+                    <div
+                      className="
+                        flex min-h-72
+                        items-center justify-center
+                        rounded-xl
+                        border border-dashed border-white/10
+                        bg-white/[0.015]
+                        px-6 text-center
+                      "
+                    >
+                      <div>
+                        <p className="text-white/45">
+                          Cole uma lista para visualizar as cartas.
+                        </p>
+
+                        <p className="mt-2 text-sm text-white/25">
+                          A prévia aparece automaticamente.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {parsedImport.cards.map((card, index) => (
+                        <div
+                          key={`${card.board}-${card.name}-${index}`}
+                          className="
+                            flex items-center gap-4
+                            rounded-xl
+                            border border-white/8
+                            bg-white/[0.02]
+                            px-4 py-3
+                          "
+                        >
+                          <span
+                            className="
+                              flex h-8 min-w-8
+                              items-center justify-center
+                              rounded-lg
+                              border border-white/10
+                              bg-black/25
+                              px-2
+                              text-xs font-medium
+                              text-white/55
+                            "
+                          >
+                            {card.quantity}x
+                          </span>
+
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm text-white/70">
+                              {card.name}
+                            </p>
+
+                            <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-white/20">
+                              {card.board === "commander"
+                                ? "Comandante"
+                                : card.board === "sideboard"
+                                  ? "Sideboard"
+                                  : card.board === "maybeboard"
+                                    ? "Maybeboard"
+                                    : "Deck"}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+
+                      {parsedImport.invalidLines.length > 0 && (
+                        <div className="mt-5 rounded-xl border border-amber-200/10 bg-amber-200/[0.025] p-4">
+                          <p className="text-xs uppercase tracking-[0.16em] text-amber-100/40">
+                            Linhas não reconhecidas
+                          </p>
+
+                          <div className="mt-3 space-y-1.5">
+                            {parsedImport.invalidLines.map(
+                              (line, index) => (
+                                <p
+                                  key={`${line}-${index}`}
+                                  className="break-words font-mono text-xs text-white/30"
+                                >
+                                  {line}
+                                </p>
+                              )
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* RODAPÉ */}
+            <div className="flex flex-col gap-4 border-t border-white/10 px-6 py-5 md:flex-row md:items-center md:justify-between md:px-8">
+              <p className="max-w-2xl text-xs leading-5 text-white/25">
+                Nesta etapa o CurveOut já interpreta a lista. A próxima parte
+                será resolver cada nome no Scryfall e gravar as cartas em
+                deck_cards.
+              </p>
+
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setImportDeckOpen(false)}
+                  className="
+                    rounded-lg
+                    px-4 py-2.5
+                    text-sm text-white/45
+                    transition
+                    hover:text-white
+                  "
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  type="button"
+                  disabled={parsedImport.cards.length === 0}
+                  title="A conexão com o Scryfall será ligada na próxima etapa."
+                  className="
+                    rounded-lg
+                    bg-[#f4f1e8]
+                    px-5 py-2.5
+                    text-sm font-semibold
+                    text-black
+                    transition
+                    hover:bg-white
+                    disabled:cursor-not-allowed
+                    disabled:opacity-35
+                  "
+                >
+                  Preparar {parsedImport.totalCopies || ""} cartas
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isOwner && deleteDeckOpen && (
+        <div
+          className="
+            fixed inset-0 z-[60]
+            flex items-center justify-center
+            bg-black/80
+            px-4 py-6
+            backdrop-blur-sm
+          "
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deleting) {
+              setDeleteDeckOpen(false);
+            }
+          }}
+        >
+          <div
+            className="
+              w-full max-w-lg
+              rounded-2xl
+              border border-red-300/15
+              bg-[#111114]
+              p-6
+              shadow-2xl
+              md:p-7
+            "
+          >
+            <p className="text-xs uppercase tracking-[0.2em] text-red-300/50">
+              Zona de perigo
+            </p>
+
+            <h2 className="mt-2 text-2xl font-semibold">
+              Excluir “{deck.name}”?
+            </h2>
+
+            <p className="mt-4 text-sm leading-6 text-white/40">
+              O deck será removido permanentemente. Quando houver cartas
+              vinculadas a ele, elas também serão removidas junto com o deck.
+            </p>
+
+            <div className="mt-7 flex justify-end gap-2 border-t border-white/10 pt-5">
+              <button
+                type="button"
+                onClick={() => setDeleteDeckOpen(false)}
+                disabled={deleting}
+                className="
+                  rounded-lg
+                  px-4 py-2.5
+                  text-sm text-white/45
+                  transition
+                  hover:text-white
+                  disabled:opacity-40
+                "
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={deleteDeck}
+                disabled={deleting}
+                className="
+                  rounded-lg
+                  border border-red-300/20
+                  bg-red-300/[0.08]
+                  px-4 py-2.5
+                  text-sm font-semibold
+                  text-red-100
+                  transition
+                  hover:bg-red-300/[0.13]
+                  disabled:cursor-wait
+                  disabled:opacity-50
+                "
+              >
+                {deleting ? "Excluindo..." : "Excluir permanentemente"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isOwner && updateDeckOpen && (
         <div
           className="
             fixed inset-0 z-50
