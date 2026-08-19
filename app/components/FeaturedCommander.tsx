@@ -61,8 +61,7 @@ type FeaturedCommanderProps = {
   cinzelClassName: string;
 };
 
-const proxyUrl =
-  "https://curveout.com.br/api/scryfall/commander";
+const proxyUrl = "/api/scryfall/commander";
 
 function getCardImage(card: Commander) {
   return (

@@ -57,20 +57,20 @@ function getCardImage(card: ScryfallCard) {
   );
 }
 
-function proxiedImageUrl(imageUrl: string | undefined, origin: string) {
+function proxiedImageUrl(imageUrl: string | undefined) {
   if (!imageUrl) return undefined;
 
-  return `${origin}/api/scryfall/image?url=${encodeURIComponent(imageUrl)}`;
+  return `/api/scryfall/image?url=${encodeURIComponent(imageUrl)}`;
 }
 
-function proxifyCard(card: ScryfallCard, origin: string): ScryfallCard {
+function proxifyCard(card: ScryfallCard): ScryfallCard {
   return {
     ...card,
 
     image_uris: card.image_uris
       ? {
-          normal: proxiedImageUrl(card.image_uris.normal, origin),
-          large: proxiedImageUrl(card.image_uris.large, origin),
+          normal: proxiedImageUrl(card.image_uris.normal),
+          large: proxiedImageUrl(card.image_uris.large),
         }
       : undefined,
 
@@ -78,8 +78,8 @@ function proxifyCard(card: ScryfallCard, origin: string): ScryfallCard {
       ...face,
       image_uris: face.image_uris
         ? {
-            normal: proxiedImageUrl(face.image_uris.normal, origin),
-            large: proxiedImageUrl(face.image_uris.large, origin),
+            normal: proxiedImageUrl(face.image_uris.normal),
+            large: proxiedImageUrl(face.image_uris.large),
           }
         : undefined,
     })),
@@ -125,13 +125,10 @@ export function OPTIONS() {
   });
 }
 
-export async function GET(request: Request) {
+export async function GET() {
   try {
-    const requestUrl = new URL(request.url);
-    const origin = requestUrl.origin;
-
     const rawCommander = await getRandomCommander();
-    const commander = proxifyCard(rawCommander, origin);
+    const commander = proxifyCard(rawCommander);
 
     const currentRawImage = getCardImage(rawCommander);
 
@@ -141,7 +138,7 @@ export async function GET(request: Request) {
           set: rawCommander.set,
           set_name: rawCommander.set_name,
           released_at: rawCommander.released_at,
-          image: proxiedImageUrl(currentRawImage, origin)!,
+          image: proxiedImageUrl(currentRawImage)!,
         }
       : null;
 
@@ -173,7 +170,7 @@ export async function GET(request: Request) {
               set: card.set,
               set_name: card.set_name,
               released_at: card.released_at,
-              image: proxiedImageUrl(image, origin)!,
+              image: proxiedImageUrl(image)!,
             };
           })
           .filter(
