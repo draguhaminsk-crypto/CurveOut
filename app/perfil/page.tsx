@@ -1,11 +1,14 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element */
+
 import {
   useEffect,
   useRef,
   useState,
   type ChangeEvent,
 } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "../../lib/supabase/client";
 
@@ -15,6 +18,30 @@ type Profile = {
   avatar_url: string | null;
   favorite_card_oracle_id: string | null;
   favorite_card_printing_id: string | null;
+};
+
+type ScryfallImageUris = {
+  small?: string;
+  normal?: string;
+  large?: string;
+  png?: string;
+  art_crop?: string;
+  border_crop?: string;
+};
+
+type ScryfallCard = {
+  id: string;
+  oracle_id?: string;
+  name: string;
+  set: string;
+  set_name: string;
+  collector_number: string;
+  scryfall_uri?: string;
+  image_uris?: ScryfallImageUris;
+  card_faces?: Array<{
+    name: string;
+    image_uris?: ScryfallImageUris;
+  }>;
 };
 
 export default function ProfilePage() {
@@ -33,6 +60,13 @@ export default function ProfilePage() {
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
   const [message, setMessage] = useState("");
+
+  const [favoriteCard, setFavoriteCard] =
+    useState<ScryfallCard | null>(null);
+  const [loadingFavoriteCard, setLoadingFavoriteCard] =
+    useState(false);
+  const [favoriteCardError, setFavoriteCardError] =
+    useState("");
 
   useEffect(() => {
     async function loadProfile() {
@@ -69,6 +103,66 @@ export default function ProfilePage() {
 
     loadProfile();
   }, [router, supabase]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFavoriteCard() {
+      const printingId = profile?.favorite_card_printing_id;
+
+      if (!printingId) {
+        setFavoriteCard(null);
+        setFavoriteCardError("");
+        setLoadingFavoriteCard(false);
+        return;
+      }
+
+      setLoadingFavoriteCard(true);
+      setFavoriteCardError("");
+
+      try {
+        const response = await fetch(
+          `https://api.scryfall.com/cards/${encodeURIComponent(printingId)}`,
+          {
+            headers: {
+              Accept: "application/json",
+            },
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            `Scryfall respondeu com status ${response.status}.`
+          );
+        }
+
+        const card = (await response.json()) as ScryfallCard;
+
+        if (!cancelled) {
+          setFavoriteCard(card);
+        }
+      } catch (error) {
+        console.error("Erro ao carregar carta favorita:", error);
+
+        if (!cancelled) {
+          setFavoriteCard(null);
+          setFavoriteCardError(
+            "Não foi possível carregar os dados da carta no Scryfall."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingFavoriteCard(false);
+        }
+      }
+    }
+
+    loadFavoriteCard();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.favorite_card_printing_id]);
 
   async function saveBio() {
     if (!profile) return;
@@ -240,17 +334,34 @@ export default function ProfilePage() {
 
   const initial = profile.nickname.charAt(0).toUpperCase();
 
+  const favoriteCardImage =
+    favoriteCard?.image_uris?.normal ??
+    favoriteCard?.image_uris?.large ??
+    favoriteCard?.card_faces?.find(
+      (face) => face.image_uris?.normal || face.image_uris?.large
+    )?.image_uris?.normal ??
+    favoriteCard?.card_faces?.find(
+      (face) => face.image_uris?.normal || face.image_uris?.large
+    )?.image_uris?.large ??
+    null;
+
+  const favoriteCardArt =
+    favoriteCard?.image_uris?.art_crop ??
+    favoriteCard?.card_faces?.find((face) => face.image_uris?.art_crop)
+      ?.image_uris?.art_crop ??
+    null;
+
   return (
     <main className="min-h-screen bg-[#0b0b0d] px-6 py-10 text-[#f4f1e8] md:px-10">
       <div className="mx-auto max-w-6xl">
 
         {/* VOLTAR */}
-        <a
+        <Link
           href="/"
           className="text-sm text-white/40 transition hover:text-white"
         >
           ← CurveOut
-        </a>
+        </Link>
 
         {/* CABEÇALHO DO PERFIL */}
         <section className="mt-10 border-b border-white/10 pb-12">
@@ -422,7 +533,7 @@ export default function ProfilePage() {
             </div>
 
             {/* CONFIGURAÇÕES */}
-            <a
+            <Link
               href="/configuracoes"
               className="
                 self-start
@@ -436,7 +547,7 @@ export default function ProfilePage() {
               "
             >
               Editar perfil
-            </a>
+            </Link>
           </div>
         </section>
 
@@ -444,92 +555,242 @@ export default function ProfilePage() {
         <section className="border-b border-white/10 py-12">
           <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
             <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-white/30">
-                Identidade
+              <p className="text-xs uppercase tracking-[0.28em] text-[#c8b27a]/55">
+                CurveOut // Identidade
               </p>
 
-              <h2 className="mt-2 text-3xl font-semibold">
+              <h2 className="mt-2 text-3xl font-semibold tracking-tight">
                 Carta favorita
               </h2>
             </div>
 
-            <a
+            <Link
               href="/perfil/carta-favorita"
               className="
                 rounded-lg
-                border border-white/15
+                border border-[#c8b27a]/25
+                bg-[#c8b27a]/[0.04]
                 px-5 py-2.5
-                text-sm text-white/65
+                text-sm text-[#e6d8b6]/75
                 transition
-                hover:border-white/30
-                hover:text-white
+                hover:border-[#c8b27a]/50
+                hover:bg-[#c8b27a]/[0.08]
+                hover:text-[#f4e7c5]
               "
             >
               {profile.favorite_card_printing_id
                 ? "Trocar carta"
                 : "+ Escolher carta"}
-            </a>
+            </Link>
           </div>
 
           {profile.favorite_card_printing_id ? (
             <div
               className="
-                flex min-h-64
-                items-center justify-center
-                rounded-2xl
+                group relative overflow-hidden
+                rounded-[1.4rem]
                 border border-white/10
-                bg-white/[0.02]
-                px-6 text-center
+                bg-[#111114]
+                shadow-[0_28px_80px_rgba(0,0,0,0.28)]
               "
             >
-              <div>
-                <p className="text-white/55">
-                  Carta favorita salva.
-                </p>
+              {favoriteCardArt && (
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 scale-110 bg-cover bg-center opacity-[0.13] blur-2xl transition duration-700 group-hover:scale-[1.14] group-hover:opacity-[0.16]"
+                  style={{ backgroundImage: `url(${favoriteCardArt})` }}
+                />
+              )}
 
-                <p className="mt-2 text-sm text-white/30">
-                  A imagem será carregada pelo Scryfall quando
-                  estivermos em uma rede sem o bloqueio.
-                </p>
+              <div
+                aria-hidden="true"
+                className="absolute inset-0 bg-[linear-gradient(90deg,rgba(11,11,13,0.96)_0%,rgba(11,11,13,0.88)_42%,rgba(11,11,13,0.78)_100%)]"
+              />
 
-                <a
-                  href="/perfil/carta-favorita"
-                  className="mt-5 inline-block text-sm text-white/70 underline underline-offset-4 transition hover:text-white"
-                >
-                  Trocar carta favorita
-                </a>
+              <div
+                aria-hidden="true"
+                className="absolute left-0 top-0 h-px w-32 bg-gradient-to-r from-[#c8b27a]/70 to-transparent"
+              />
+
+              <div
+                className="
+                  relative z-10 grid gap-9
+                  p-6
+                  md:grid-cols-[240px_1fr]
+                  md:items-center
+                  md:p-9
+                  lg:gap-12
+                  lg:p-10
+                "
+              >
+                <div className="mx-auto w-full max-w-[240px] md:mx-0">
+                  <div className="relative">
+                    <div
+                      aria-hidden="true"
+                      className="absolute -inset-3 rounded-[7%] border border-[#c8b27a]/10 opacity-0 transition duration-500 group-hover:opacity-100"
+                    />
+
+                    {loadingFavoriteCard ? (
+                      <div className="aspect-[488/680] animate-pulse rounded-[4.75%] border border-white/10 bg-white/[0.04]" />
+                    ) : favoriteCardImage ? (
+                      <img
+                        src={favoriteCardImage}
+                        alt={
+                          favoriteCard
+                            ? `Carta ${favoriteCard.name}`
+                            : "Carta favorita"
+                        }
+                        className="
+                          aspect-[488/680]
+                          w-full
+                          -rotate-[0.7deg]
+                          rounded-[4.75%]
+                          object-cover
+                          shadow-[0_24px_55px_rgba(0,0,0,0.55)]
+                          transition duration-500
+                          group-hover:-translate-y-1
+                          group-hover:rotate-0
+                        "
+                      />
+                    ) : (
+                      <div
+                        className="
+                          flex aspect-[488/680]
+                          items-center justify-center
+                          rounded-[4.75%]
+                          border border-dashed border-white/10
+                          bg-black/20
+                          px-5 text-center
+                          text-sm text-white/30
+                        "
+                      >
+                        {favoriteCardError ||
+                          "Imagem indisponível para esta carta."}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="text-center md:text-left">
+                  {loadingFavoriteCard ? (
+                    <div className="space-y-3">
+                      <div className="mx-auto h-3 w-28 animate-pulse rounded bg-white/[0.06] md:mx-0" />
+                      <div className="mx-auto h-10 w-72 max-w-full animate-pulse rounded bg-white/[0.06] md:mx-0" />
+                      <div className="mx-auto h-4 w-48 animate-pulse rounded bg-white/[0.04] md:mx-0" />
+                    </div>
+                  ) : favoriteCard ? (
+                    <>
+                      <div className="flex items-center justify-center gap-3 md:justify-start">
+                        <span className="h-px w-7 bg-[#c8b27a]/45" />
+                        <p className="text-[11px] uppercase tracking-[0.3em] text-[#c8b27a]/60">
+                          Favorite card
+                        </p>
+                      </div>
+
+                      <h3 className="mt-4 max-w-3xl text-4xl font-semibold leading-[1.05] tracking-[-0.025em] text-[#f4f1e8] md:text-5xl">
+                        {favoriteCard.name}
+                      </h3>
+
+                      <p className="mt-4 text-sm uppercase tracking-[0.12em] text-white/35">
+                        {favoriteCard.set_name}
+                        <span className="mx-2 text-[#c8b27a]/30">//</span>
+                        {favoriteCard.set.toUpperCase()}
+                        <span className="mx-2 text-[#c8b27a]/30">//</span>
+                        #{favoriteCard.collector_number}
+                      </p>
+
+                      <div className="mt-8 flex flex-wrap justify-center gap-3 md:justify-start">
+                        <Link
+                          href="/perfil/carta-favorita"
+                          className="
+                            rounded-lg
+                            border border-white/15
+                            bg-white/[0.025]
+                            px-5 py-2.5
+                            text-sm text-white/70
+                            transition
+                            hover:border-[#c8b27a]/35
+                            hover:text-white
+                          "
+                        >
+                          Trocar carta
+                        </Link>
+
+                        {favoriteCard.scryfall_uri && (
+                          <a
+                            href={favoriteCard.scryfall_uri}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="
+                              rounded-lg
+                              px-4 py-2.5
+                              text-sm text-white/35
+                              transition
+                              hover:text-[#d9c690]/80
+                            "
+                          >
+                            Ver no Scryfall ↗
+                          </a>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-white/55">
+                        Carta favorita salva.
+                      </p>
+
+                      <p className="mt-2 text-sm text-white/30">
+                        {favoriteCardError ||
+                          "Não foi possível carregar os dados da carta."}
+                      </p>
+
+                      <Link
+                        href="/perfil/carta-favorita"
+                        className="mt-5 inline-block text-sm text-white/70 underline underline-offset-4 transition hover:text-white"
+                      >
+                        Trocar carta favorita
+                      </Link>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
           ) : (
             <div
               className="
-                flex min-h-64
-                items-center justify-center
-                rounded-2xl
-                border border-dashed border-white/10
-                bg-white/[0.015]
-                px-6 text-center
+                relative overflow-hidden
+                rounded-[1.4rem]
+                border border-dashed border-[#c8b27a]/20
+                bg-[#c8b27a]/[0.018]
+                px-6 py-16 text-center
               "
             >
-              <div>
-                <div className="mx-auto mb-4 text-4xl text-white/15">
+              <div
+                aria-hidden="true"
+                className="absolute left-1/2 top-0 h-px w-32 -translate-x-1/2 bg-gradient-to-r from-transparent via-[#c8b27a]/45 to-transparent"
+              />
+
+              <div className="relative">
+                <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-full border border-[#c8b27a]/15 text-2xl text-[#c8b27a]/30">
                   ♠
                 </div>
 
-                <p className="text-white/45">
+                <p className="text-white/55">
                   Nenhuma carta favorita escolhida.
                 </p>
 
-                <p className="mt-2 text-sm text-white/25">
-                  Escolha uma carta para representar seu perfil.
+                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-white/28">
+                  Escolha uma carta que represente seu perfil dentro do
+                  CurveOut.
                 </p>
 
-                <a
+                <Link
                   href="/perfil/carta-favorita"
-                  className="mt-5 inline-block text-sm text-white/70 underline underline-offset-4 transition hover:text-white"
+                  className="mt-6 inline-block rounded-lg border border-[#c8b27a]/25 px-5 py-2.5 text-sm text-[#e6d8b6]/70 transition hover:border-[#c8b27a]/50 hover:text-[#f4e7c5]"
                 >
-                  Escolher minha carta favorita
-                </a>
+                  Escolher minha carta
+                </Link>
               </div>
             </div>
           )}
@@ -548,12 +809,12 @@ export default function ProfilePage() {
               </h2>
             </div>
 
-            <a
+            <Link
               href="/meus-decks"
               className="text-sm text-white/40 transition hover:text-white"
             >
               Ver todos →
-            </a>
+            </Link>
           </div>
 
           <div className="mt-8 grid gap-4 sm:grid-cols-3">
