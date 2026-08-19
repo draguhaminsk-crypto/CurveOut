@@ -51,6 +51,111 @@ type ParsedImport = {
   totalCopies: number;
 };
 
+type MissingImportCard = {
+  name: string;
+  quantity: number;
+  board: ImportBoard;
+};
+
+type ResolvedScryfallCard = {
+  id: string;
+  oracle_id?: string;
+  name: string;
+  requested_name?: string;
+  type_line?: string;
+  image_uris?: {
+    normal?: string;
+    large?: string;
+  };
+  card_faces?: {
+    image_uris?: {
+      normal?: string;
+      large?: string;
+    };
+  }[];
+};
+
+type DeckCardRow = {
+  id?: string;
+  deck_id: string;
+  scryfall_id: string;
+  oracle_id: string | null;
+  quantity: number;
+  board: ImportBoard;
+  created_at?: string;
+  card?: ResolvedScryfallCard;
+};
+
+function getDeckCardImage(card?: ResolvedScryfallCard) {
+  return (
+    card?.image_uris?.normal ??
+    card?.image_uris?.large ??
+    card?.card_faces?.[0]?.image_uris?.normal ??
+    card?.card_faces?.[0]?.image_uris?.large ??
+    null
+  );
+}
+
+function getProxiedCardImage(card?: ResolvedScryfallCard) {
+  const image = getDeckCardImage(card);
+
+  if (!image) return null;
+
+  return `/api/scryfall/image?url=${encodeURIComponent(image)}`;
+}
+
+function getBoardLabel(board: ImportBoard) {
+  if (board === "commander") return "Comandante";
+  if (board === "sideboard") return "Sideboard";
+  if (board === "maybeboard") return "Maybeboard";
+
+  return "Deck";
+}
+
+type TypeGroupName =
+  | "Comandante"
+  | "Criaturas"
+  | "Artefatos"
+  | "Encantamentos"
+  | "Planeswalkers"
+  | "Instantâneas"
+  | "Feitiços"
+  | "Batalhas"
+  | "Terrenos"
+  | "Outros";
+
+const typeGroupOrder: TypeGroupName[] = [
+  "Comandante",
+  "Criaturas",
+  "Artefatos",
+  "Encantamentos",
+  "Planeswalkers",
+  "Instantâneas",
+  "Feitiços",
+  "Batalhas",
+  "Terrenos",
+  "Outros",
+];
+
+function getCardTypeGroup(row: DeckCardRow): TypeGroupName {
+  if (row.board === "commander") {
+    return "Comandante";
+  }
+
+  const typeLine = row.card?.type_line?.toLocaleLowerCase("pt-BR") ?? "";
+
+  if (typeLine.includes("land")) return "Terrenos";
+  if (typeLine.includes("creature")) return "Criaturas";
+  if (typeLine.includes("artifact")) return "Artefatos";
+  if (typeLine.includes("enchantment")) return "Encantamentos";
+  if (typeLine.includes("planeswalker")) return "Planeswalkers";
+  if (typeLine.includes("instant")) return "Instantâneas";
+  if (typeLine.includes("sorcery")) return "Feitiços";
+  if (typeLine.includes("battle")) return "Batalhas";
+
+  return "Outros";
+}
+
 function truncateText(text: string, maxLength = 500) {
   const cleanText = text.trim();
 
@@ -113,6 +218,7 @@ function parseImportList(value: string): ParsedImport {
     }
 
     // Aceita:
+    // Grave Researcher        -> assume 1 cópia
     // 1 Sol Ring
     // 1x Sol Ring
     // 1 x Sol Ring
@@ -120,19 +226,14 @@ function parseImportList(value: string): ParsedImport {
     // 1 Sol Ring [CMM]
     const match = line.match(/^(\d+)\s*[xX]?\s+(.+)$/);
 
-    if (!match) {
-      invalidLines.push(line);
-      continue;
-    }
-
-    const quantity = Number(match[1]);
+    const quantity = match ? Number(match[1]) : 1;
 
     if (!Number.isFinite(quantity) || quantity <= 0) {
       invalidLines.push(line);
       continue;
     }
 
-    let cardName = match[2].trim();
+    let cardName = match ? match[2].trim() : line;
 
     // Remove informações comuns de impressão no fim da linha:
     // (SET) 123 / [SET] / (SET)
@@ -300,6 +401,13 @@ export default function DeckPage() {
   const [description, setDescription] = useState("");
 
   const [cardSearch, setCardSearch] = useState("");
+  const [cardSearchResults, setCardSearchResults] = useState<string[]>([]);
+  const [cardSearchOpen, setCardSearchOpen] = useState(false);
+  const [cardSearchLoading, setCardSearchLoading] = useState(false);
+  const [cardSearchError, setCardSearchError] = useState("");
+  const [cardSearchStatus, setCardSearchStatus] = useState("");
+  const [addingCard, setAddingCard] = useState(false);
+  const [highlightedCardIndex, setHighlightedCardIndex] = useState(0);
   const [deckSearch, setDeckSearch] = useState("");
   const [organizeBy, setOrganizeBy] = useState("Tipo");
   const [viewMode, setViewMode] = useState("Stack");
@@ -309,6 +417,14 @@ export default function DeckPage() {
   const [updateDeckOpen, setUpdateDeckOpen] = useState(false);
   const [importDeckOpen, setImportDeckOpen] = useState(false);
   const [importText, setImportText] = useState("");
+  const [importPrepared, setImportPrepared] = useState(false);
+  const [importingCards, setImportingCards] = useState(false);
+  const [importResult, setImportResult] = useState("");
+  const [importMissingCards, setImportMissingCards] = useState<
+    MissingImportCard[]
+  >([]);
+  const [importMissingCopied, setImportMissingCopied] = useState(false);
+  const [deckCards, setDeckCards] = useState<DeckCardRow[]>([]);
   const [exportDeckOpen, setExportDeckOpen] = useState(false);
   const [exportCopied, setExportCopied] = useState(false);
   const [shareDeckOpen, setShareDeckOpen] = useState(false);
@@ -317,11 +433,105 @@ export default function DeckPage() {
   const [deleting, setDeleting] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
   const priceMenuRef = useRef<HTMLDivElement | null>(null);
+  const cardSearchRef = useRef<HTMLDivElement | null>(null);
 
   const parsedImport = useMemo(
     () => parseImportList(importText),
     [importText]
   );
+
+  const deckCardTotal = useMemo(
+    () =>
+      deckCards.reduce(
+        (total, card) => total + card.quantity,
+        0
+      ),
+    [deckCards]
+  );
+
+  const visibleDeckCards = useMemo(() => {
+    const search = deckSearch.trim().toLocaleLowerCase("pt-BR");
+
+    if (!search) return deckCards;
+
+    return deckCards.filter((row) =>
+      (row.card?.name ?? row.scryfall_id)
+        .toLocaleLowerCase("pt-BR")
+        .includes(search)
+    );
+  }, [deckCards, deckSearch]);
+
+  const deckCardsByType = useMemo(() => {
+    const grouped = new Map<TypeGroupName, DeckCardRow[]>();
+
+    for (const groupName of typeGroupOrder) {
+      grouped.set(groupName, []);
+    }
+
+    for (const row of visibleDeckCards) {
+      grouped.get(getCardTypeGroup(row))?.push(row);
+    }
+
+    return typeGroupOrder
+      .map((groupName) => ({
+        name: groupName,
+        cards: grouped.get(groupName) ?? [],
+      }))
+      .filter((group) => group.cards.length > 0);
+  }, [visibleDeckCards]);
+
+  async function loadDeckCards(deckId: string) {
+    const { data, error } = await supabase
+      .from("deck_cards")
+      .select(
+        "id, deck_id, scryfall_id, oracle_id, quantity, board, created_at"
+      )
+      .eq("deck_id", deckId)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("Erro ao carregar cartas do deck:", error);
+      return;
+    }
+
+    const rows = (data ?? []) as DeckCardRow[];
+    setDeckCards(rows);
+
+    if (rows.length === 0) return;
+
+    try {
+      const response = await fetch("/api/scryfall/cards", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          identifiers: rows.map((row) => ({
+            id: row.scryfall_id,
+          })),
+        }),
+      });
+
+      if (!response.ok) return;
+
+      const result = (await response.json()) as {
+        cards?: ResolvedScryfallCard[];
+      };
+
+      const cardsById = new Map(
+        (result.cards ?? []).map((card) => [card.id, card])
+      );
+
+      setDeckCards(
+        rows.map((row) => ({
+          ...row,
+          card: cardsById.get(row.scryfall_id),
+        }))
+      );
+    } catch (error) {
+      console.error("Não foi possível resolver os nomes das cartas:", error);
+    }
+  }
 
   useEffect(() => {
     async function loadDeck() {
@@ -360,6 +570,8 @@ export default function DeckPage() {
       setDescription(data.description ?? "");
 
       setIsOwner(Boolean(user && user.id === data.owner_id));
+
+      await loadDeckCards(data.id);
 
       setLoading(false);
     }
@@ -420,6 +632,84 @@ export default function DeckPage() {
     loadRandomDeckArt();
   }, []);
 
+
+  useEffect(() => {
+    const query = cardSearch.trim();
+
+    if (query.length < 2) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const timeout = window.setTimeout(async () => {
+      try {
+        setCardSearchLoading(true);
+        setCardSearchError("");
+
+        const response = await fetch(
+          `/api/scryfall/autocomplete?q=${encodeURIComponent(query)}`,
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
+
+        const result = (await response.json()) as {
+          data?: string[];
+          error?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(
+            result.error ?? "Não foi possível pesquisar as cartas."
+          );
+        }
+
+        const suggestions = (result.data ?? []).slice(0, 10);
+
+        setCardSearchResults(suggestions);
+        setHighlightedCardIndex(0);
+        setCardSearchOpen(suggestions.length > 0);
+      } catch (error) {
+        if (
+          error instanceof DOMException &&
+          error.name === "AbortError"
+        ) {
+          return;
+        }
+
+        console.error("Erro no autocomplete de cartas:", error);
+        setCardSearchResults([]);
+        setCardSearchOpen(false);
+        setCardSearchError("Não foi possível carregar sugestões.");
+      } finally {
+        setCardSearchLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [cardSearch]);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        cardSearchRef.current &&
+        !cardSearchRef.current.contains(event.target as Node)
+      ) {
+        setCardSearchOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -518,6 +808,34 @@ export default function DeckPage() {
     setSaving(false);
   }
 
+  const clipboardDeckText = useMemo(() => {
+    if (deckCards.length === 0) return "";
+
+    const boardOrder: ImportBoard[] = [
+      "commander",
+      "mainboard",
+      "sideboard",
+      "maybeboard",
+    ];
+
+    return [...deckCards]
+      .sort((a, b) => {
+        const boardDifference =
+          boardOrder.indexOf(a.board) - boardOrder.indexOf(b.board);
+
+        if (boardDifference !== 0) return boardDifference;
+
+        return (a.card?.name ?? a.scryfall_id).localeCompare(
+          b.card?.name ?? b.scryfall_id
+        );
+      })
+      .map(
+        (row) =>
+          `${row.quantity} ${row.card?.name ?? row.scryfall_id}`
+      )
+      .join("\n");
+  }, [deckCards]);
+
   const exportText = useMemo(() => {
     if (!deck) return "";
 
@@ -531,25 +849,14 @@ export default function DeckPage() {
       lines.push("", `Notas: ${deck.description}`);
     }
 
-    lines.push(
-      "",
-      "Deck",
-      "",
-      "Nenhuma carta adicionada ainda."
-    );
+    if (clipboardDeckText) {
+      lines.push("", "Cartas", "", clipboardDeckText);
+    } else {
+      lines.push("", "Deck", "", "Nenhuma carta adicionada ainda.");
+    }
 
     return lines.join("\n");
-  }, [deck]);
-
-  const clipboardDeckText = useMemo(() => {
-    // Quando deck_cards estiver ligado, este texto será montado no formato:
-    // 1 Sol Ring
-    // 1 Arcane Signet
-    // 4 Forest
-    //
-    // Por enquanto o deck está sem cartas.
-    return "";
-  }, []);
+  }, [deck, clipboardDeckText]);
 
   async function copyExportText() {
     try {
@@ -594,6 +901,410 @@ export default function DeckPage() {
     link.remove();
 
     URL.revokeObjectURL(url);
+  }
+
+  async function copyMissingImportCards() {
+    if (importMissingCards.length === 0) return;
+
+    const textToCopy = importMissingCards
+      .map((card) => `${card.quantity} ${card.name}`)
+      .join("\n");
+
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      setImportMissingCopied(true);
+
+      window.setTimeout(() => {
+        setImportMissingCopied(false);
+      }, 1800);
+    } catch (error) {
+      console.error("Erro ao copiar cartas não encontradas:", error);
+    }
+  }
+
+  async function addCardToDeck(cardName: string) {
+    const cleanName = cardName.trim();
+
+    if (!deck || !isOwner || !cleanName || addingCard) {
+      return;
+    }
+
+    setAddingCard(true);
+    setCardSearchError("");
+    setCardSearchStatus(`Adicionando ${cleanName}...`);
+
+    try {
+      const response = await fetch("/api/scryfall/cards", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          identifiers: [{ name: cleanName }],
+        }),
+      });
+
+      const result = (await response.json()) as {
+        cards?: ResolvedScryfallCard[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          result.error ?? "Não foi possível consultar o Scryfall."
+        );
+      }
+
+      const resolvedCard = result.cards?.[0];
+
+      if (!resolvedCard) {
+        throw new Error("Carta não encontrada.");
+      }
+
+      const existingCard = deckCards.find(
+        (row) =>
+          row.scryfall_id === resolvedCard.id &&
+          row.board === "mainboard"
+      );
+
+      if (existingCard?.id) {
+        const { error: updateError } = await supabase
+          .from("deck_cards")
+          .update({
+            quantity: existingCard.quantity + 1,
+          })
+          .eq("id", existingCard.id)
+          .eq("deck_id", deck.id);
+
+        if (updateError) {
+          throw updateError;
+        }
+      } else {
+        const { error: insertError } = await supabase
+          .from("deck_cards")
+          .insert({
+            deck_id: deck.id,
+            scryfall_id: resolvedCard.id,
+            oracle_id: resolvedCard.oracle_id ?? null,
+            quantity: 1,
+            board: "mainboard",
+          });
+
+        if (insertError) {
+          throw insertError;
+        }
+      }
+
+      const updatedAt = new Date().toISOString();
+
+      const { error: deckUpdateError } = await supabase
+        .from("decks")
+        .update({
+          updated_at: updatedAt,
+        })
+        .eq("id", deck.id)
+        .eq("owner_id", deck.owner_id);
+
+      if (deckUpdateError) {
+        throw deckUpdateError;
+      }
+
+      setDeck({
+        ...deck,
+        updated_at: updatedAt,
+      });
+
+      await loadDeckCards(deck.id);
+
+      setCardSearch("");
+      setCardSearchResults([]);
+      setCardSearchOpen(false);
+      setHighlightedCardIndex(0);
+      setCardSearchStatus(`${resolvedCard.name} adicionada ✓`);
+
+      window.setTimeout(() => {
+        setCardSearchStatus("");
+      }, 1800);
+    } catch (error) {
+      console.error("Erro ao adicionar carta:", error);
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível adicionar a carta.";
+
+      setCardSearchError(message);
+      setCardSearchStatus("");
+    } finally {
+      setAddingCard(false);
+    }
+  }
+
+  function handleCardSearchKeyDown(
+    event: React.KeyboardEvent<HTMLInputElement>
+  ) {
+    if (event.key === "ArrowDown" && cardSearchResults.length > 0) {
+      event.preventDefault();
+      setCardSearchOpen(true);
+      setHighlightedCardIndex((current) =>
+        Math.min(current + 1, cardSearchResults.length - 1)
+      );
+      return;
+    }
+
+    if (event.key === "ArrowUp" && cardSearchResults.length > 0) {
+      event.preventDefault();
+      setHighlightedCardIndex((current) =>
+        Math.max(current - 1, 0)
+      );
+      return;
+    }
+
+    if (event.key === "Escape") {
+      setCardSearchOpen(false);
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+
+      const selectedSuggestion =
+        cardSearchOpen && cardSearchResults.length > 0
+          ? cardSearchResults[highlightedCardIndex]
+          : cardSearch.trim();
+
+      if (selectedSuggestion) {
+        void addCardToDeck(selectedSuggestion);
+      }
+    }
+  }
+
+  async function importCardsToDeck() {
+    if (
+      !deck ||
+      !isOwner ||
+      parsedImport.cards.length === 0 ||
+      importingCards
+    ) {
+      return;
+    }
+
+    setImportingCards(true);
+    setImportPrepared(false);
+    setImportMissingCards([]);
+    setImportMissingCopied(false);
+    setImportResult("Consultando as cartas no Scryfall...");
+    setErrorMessage("");
+
+    try {
+      const uniqueNames = Array.from(
+        new Set(
+          parsedImport.cards.map((card) =>
+            card.name.toLocaleLowerCase("en-US")
+          )
+        )
+      );
+
+      const originalNameByNormalized = new Map(
+        parsedImport.cards.map((card) => [
+          card.name.toLocaleLowerCase("en-US"),
+          card.name,
+        ])
+      );
+
+      const response = await fetch("/api/scryfall/cards", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          identifiers: uniqueNames.map((normalizedName) => ({
+            name: originalNameByNormalized.get(normalizedName),
+          })),
+        }),
+      });
+
+      const result = (await response.json()) as {
+        cards?: ResolvedScryfallCard[];
+        notFound?: { name?: string; id?: string }[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          result.error ?? "Não foi possível consultar o Scryfall."
+        );
+      }
+
+      const resolvedCards = result.cards ?? [];
+      const cardsByName = new Map<string, ResolvedScryfallCard>();
+
+      for (const card of resolvedCards) {
+        cardsByName.set(
+          card.name.toLocaleLowerCase("en-US"),
+          card
+        );
+
+        // Quando a API precisou fazer fallback fuzzy, guardamos também
+        // o nome exatamente como veio da lista importada.
+        if (card.requested_name) {
+          cardsByName.set(
+            card.requested_name.toLocaleLowerCase("en-US"),
+            card
+          );
+        }
+
+        // Também ajuda com cards cujo nome canônico é algo como
+        // "Grave Researcher // Reanimate".
+        const frontFaceName = card.name.split(" // ")[0]?.trim();
+
+        if (frontFaceName) {
+          cardsByName.set(
+            frontFaceName.toLocaleLowerCase("en-US"),
+            card
+          );
+        }
+      }
+
+      const groupedRows = new Map<
+        string,
+        {
+          deck_id: string;
+          scryfall_id: string;
+          oracle_id: string | null;
+          quantity: number;
+          board: ImportBoard;
+        }
+      >();
+
+      const missingCardsMap = new Map<string, MissingImportCard>();
+
+      for (const importedCard of parsedImport.cards) {
+        const resolved = cardsByName.get(
+          importedCard.name.toLocaleLowerCase("en-US")
+        );
+
+        if (!resolved) {
+          const missingKey = `${importedCard.board}:${importedCard.name.toLocaleLowerCase(
+            "en-US"
+          )}`;
+
+          const existingMissing = missingCardsMap.get(missingKey);
+
+          if (existingMissing) {
+            existingMissing.quantity += importedCard.quantity;
+          } else {
+            missingCardsMap.set(missingKey, {
+              name: importedCard.name,
+              quantity: importedCard.quantity,
+              board: importedCard.board,
+            });
+          }
+
+          continue;
+        }
+
+        const key = `${resolved.id}:${importedCard.board}`;
+        const existing = groupedRows.get(key);
+
+        if (existing) {
+          existing.quantity += importedCard.quantity;
+        } else {
+          groupedRows.set(key, {
+            deck_id: deck.id,
+            scryfall_id: resolved.id,
+            oracle_id: resolved.oracle_id ?? null,
+            quantity: importedCard.quantity,
+            board: importedCard.board,
+          });
+        }
+      }
+
+      const rows = Array.from(groupedRows.values());
+
+      if (rows.length === 0) {
+        throw new Error(
+          "Nenhuma carta da lista foi encontrada no Scryfall."
+        );
+      }
+
+      setImportResult("Salvando as cartas no deck...");
+
+      const { error: upsertError } = await supabase
+        .from("deck_cards")
+        .upsert(rows, {
+          onConflict: "deck_id,scryfall_id,board",
+        });
+
+      if (upsertError) {
+        throw upsertError;
+      }
+
+      const commander = rows.find(
+        (row) => row.board === "commander"
+      );
+      const updatedAt = new Date().toISOString();
+
+      const deckUpdate: {
+        updated_at: string;
+        commander_scryfall_id?: string;
+      } = {
+        updated_at: updatedAt,
+      };
+
+      if (commander) {
+        deckUpdate.commander_scryfall_id = commander.scryfall_id;
+      }
+
+      const { error: deckUpdateError } = await supabase
+        .from("decks")
+        .update(deckUpdate)
+        .eq("id", deck.id)
+        .eq("owner_id", deck.owner_id);
+
+      if (deckUpdateError) {
+        throw deckUpdateError;
+      }
+
+      setDeck({
+        ...deck,
+        updated_at: updatedAt,
+        commander_scryfall_id:
+          commander?.scryfall_id ?? deck.commander_scryfall_id,
+      });
+
+      await loadDeckCards(deck.id);
+
+      const importedCopies = rows.reduce(
+        (total, row) => total + row.quantity,
+        0
+      );
+
+      const missingCards = Array.from(missingCardsMap.values());
+      const missingCopies = missingCards.reduce(
+        (total, card) => total + card.quantity,
+        0
+      );
+
+      setImportMissingCards(missingCards);
+      setImportPrepared(true);
+      setImportResult(
+        missingCards.length > 0
+          ? `${importedCopies} cartas importadas. ${missingCopies} carta(s) não foram encontradas.`
+          : `${importedCopies} cartas importadas com sucesso ✓`
+      );
+    } catch (error) {
+      console.error("Erro ao importar cartas:", error);
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível importar as cartas.";
+
+      setImportResult(`Erro: ${message}`);
+    } finally {
+      setImportingCards(false);
+    }
   }
 
   async function copyShareLink() {
@@ -736,7 +1447,7 @@ export default function DeckPage() {
 
                   <span>•</span>
 
-                  <span>0 cartas</span>
+                  <span>{deckCardTotal} cartas</span>
 
                   <span>•</span>
 
@@ -862,7 +1573,11 @@ export default function DeckPage() {
 
                       <button
                         type="button"
-                        onClick={() => setImportDeckOpen(true)}
+                        onClick={() => {
+                          setImportPrepared(false);
+                          setImportResult("");
+                          setImportDeckOpen(true);
+                        }}
                         className="
                           rounded-lg
                           border border-white/15
@@ -1183,13 +1898,32 @@ export default function DeckPage() {
                     Adicionar carta
                   </label>
 
-                  <div className="relative">
+                  <div ref={cardSearchRef} className="relative">
                     <input
                       id="card-search"
                       type="search"
                       value={cardSearch}
-                      onChange={(event) => setCardSearch(event.target.value)}
-                      placeholder="Procurar carta..."
+                      autoComplete="off"
+                      onFocus={() => {
+                        if (cardSearchResults.length > 0) {
+                          setCardSearchOpen(true);
+                        }
+                      }}
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+
+                        setCardSearch(nextValue);
+                        setCardSearchStatus("");
+                        setCardSearchError("");
+
+                        if (nextValue.trim().length < 2) {
+                          setCardSearchResults([]);
+                          setCardSearchOpen(false);
+                          setHighlightedCardIndex(0);
+                        }
+                      }}
+                      onKeyDown={handleCardSearchKeyDown}
+                      placeholder="Comece a digitar o nome..."
                       className="
                         w-full rounded-xl
                         border border-white/10
@@ -1202,9 +1936,98 @@ export default function DeckPage() {
                       "
                     />
 
-                    <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/25">
-                      ⌕
+                    <span className="pointer-events-none absolute right-4 top-[23px] -translate-y-1/2 text-white/25">
+                      {cardSearchLoading ? "…" : "⌕"}
                     </span>
+
+                    {cardSearchOpen && cardSearchResults.length > 0 && (
+                      <div
+                        className="
+                          mt-2 max-h-80 overflow-y-auto
+                          rounded-xl
+                          border border-white/10
+                          bg-[#111114]/98
+                          p-1.5
+                          shadow-2xl
+                          backdrop-blur-xl
+                        "
+                      >
+                        <div className="flex items-center justify-between px-3 py-2">
+                          <p className="text-[10px] uppercase tracking-[0.16em] text-white/20">
+                            Sugestões
+                          </p>
+
+                          <span className="text-[10px] text-white/20">
+                            {cardSearchResults.length}
+                          </span>
+                        </div>
+
+                        {cardSearchResults.map((suggestion, index) => (
+                          <button
+                            key={suggestion}
+                            type="button"
+                            onMouseEnter={() =>
+                              setHighlightedCardIndex(index)
+                            }
+                            onMouseDown={(event) => {
+                              // Mantém o foco até o clique ser processado.
+                              event.preventDefault();
+                            }}
+                            onClick={() => {
+                              void addCardToDeck(suggestion);
+                            }}
+                            className={`
+                              flex w-full items-center justify-between
+                              rounded-lg px-3 py-2.5
+                              text-left text-sm
+                              transition
+                              ${
+                                index === highlightedCardIndex
+                                  ? "bg-white/[0.09] text-white"
+                                  : "text-white/65 hover:bg-white/[0.06] hover:text-white"
+                              }
+                            `}
+                          >
+                            <span className="min-w-0 truncate">
+                              {suggestion}
+                            </span>
+
+                            <span className="ml-4 shrink-0 text-[10px] uppercase tracking-[0.14em] text-white/20">
+                              Adicionar
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {cardSearch.trim().length === 1 && (
+                      <p className="mt-2 px-1 text-[11px] text-white/20">
+                        Digite mais 1 caractere para pesquisar.
+                      </p>
+                    )}
+
+                    {cardSearchError && (
+                      <p className="mt-2 px-1 text-[11px] text-red-300/60">
+                        {cardSearchError}
+                      </p>
+                    )}
+
+                    {cardSearchStatus && (
+                      <p className="mt-2 px-1 text-[11px] text-white/45">
+                        {cardSearchStatus}
+                      </p>
+                    )}
+
+                    {!cardSearchError &&
+                      !cardSearchStatus &&
+                      cardSearch.trim().length >= 2 &&
+                      !cardSearchLoading &&
+                      cardSearchResults.length === 0 && (
+                        <p className="mt-2 px-1 text-[11px] text-white/20">
+                          Continue digitando ou pressione Enter para tentar uma
+                          busca aproximada.
+                        </p>
+                      )}
                   </div>
                 </div>
                 )}
@@ -1284,38 +2107,422 @@ export default function DeckPage() {
               </div>
 
               {/* ÁREA DAS CARTAS */}
-              <div className="min-h-[420px] px-5 py-10 md:px-6 lg:px-8">
-                <div className="max-w-xl">
-                  <p className="text-lg text-white/55">
-                    {isOwner
-                      ? "Seu deck está vazio."
-                      : "Este deck está vazio."}
-                  </p>
+              <div className="min-h-[420px] px-5 py-8 md:px-6 lg:px-8">
+                {deckCards.length === 0 ? (
+                  <div className="max-w-xl py-2">
+                    <p className="text-lg text-white/55">
+                      {isOwner
+                        ? "Seu deck está vazio."
+                        : "Este deck está vazio."}
+                    </p>
 
-                  <p className="mt-2 text-sm leading-6 text-white/30">
-                    {isOwner
-                      ? "Adicione cartas para começar a montar o deck."
-                      : "O autor ainda não adicionou cartas a este deck."}
-                  </p>
+                    <p className="mt-2 text-sm leading-6 text-white/30">
+                      {isOwner
+                        ? "Adicione cartas para começar a montar o deck."
+                        : "O autor ainda não adicionou cartas a este deck."}
+                    </p>
 
-                  {isOwner && (
-                    <button
-                      type="button"
-                      className="
-                        mt-6
-                        rounded-lg
-                        bg-[#f4f1e8]
-                        px-6 py-2.5
-                        text-sm font-semibold
-                        text-black
-                        transition
-                        hover:bg-white
-                      "
-                    >
-                      Adicionar cartas
-                    </button>
-                  )}
-                </div>
+                    {isOwner && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImportPrepared(false);
+                          setImportResult("");
+                          setImportDeckOpen(true);
+                        }}
+                        className="
+                          mt-6
+                          rounded-lg
+                          bg-[#f4f1e8]
+                          px-6 py-2.5
+                          text-sm font-semibold
+                          text-black
+                          transition
+                          hover:bg-white
+                        "
+                      >
+                        Importar cartas
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <div className="mb-5 flex items-end justify-between gap-4">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.18em] text-white/25">
+                          Lista do deck
+                        </p>
+                        <p className="mt-1 text-sm text-white/40">
+                          {visibleDeckCards.length} entrada(s) · {deckCardTotal} cartas
+                        </p>
+                      </div>
+                    </div>
+
+                    {viewMode === "Stack" && organizeBy === "Tipo" && (
+                      <div className="overflow-x-auto pb-4">
+                        <div
+                          className="
+                            flex min-w-max items-end gap-5
+                            px-1 pt-4
+                          "
+                        >
+                          {deckCardsByType.map((group) => {
+                            const groupTotal = group.cards.reduce(
+                              (total, row) => total + row.quantity,
+                              0
+                            );
+
+                            return (
+                              <section
+                                key={group.name}
+                                className="
+                                  flex w-[190px] shrink-0
+                                  flex-col
+                                "
+                              >
+                                <div className="mb-3 flex items-end justify-between gap-3 px-1">
+                                  <div>
+                                    <p className="text-[10px] uppercase tracking-[0.16em] text-white/25">
+                                      {group.name}
+                                    </p>
+
+                                    <p className="mt-1 text-xs text-white/35">
+                                      {group.cards.length} entrada(s)
+                                    </p>
+                                  </div>
+
+                                  <span className="text-xs text-white/25">
+                                    {groupTotal}
+                                  </span>
+                                </div>
+
+                                <div
+                                  className="
+                                    relative
+                                    flex min-h-[560px]
+                                    flex-col-reverse
+                                    justify-start
+                                    rounded-2xl
+                                    border border-white/8
+                                    bg-white/[0.012]
+                                    px-2 pb-2 pt-20
+                                  "
+                                >
+                                  {group.cards.map((row, index) => {
+                                    const cardImage =
+                                      getProxiedCardImage(row.card);
+                                    const cardName =
+                                      row.card?.name ??
+                                      `Carta ${row.scryfall_id.slice(0, 8)}…`;
+
+                                    return (
+                                      <div
+                                        key={`${row.scryfall_id}-${row.board}`}
+                                        className="
+                                          group/card
+                                          relative
+                                          mx-auto
+                                          w-[166px]
+                                          transition
+                                          duration-200
+                                          hover:z-40
+                                        "
+                                        style={{
+                                          marginTop:
+                                            index === group.cards.length - 1
+                                              ? 0
+                                              : -178,
+                                        }}
+                                      >
+                                        <div
+                                          className="
+                                            relative aspect-[488/680]
+                                            overflow-hidden
+                                            rounded-[4.6%]
+                                            border border-white/10
+                                            bg-[#121216]
+                                            shadow-xl
+                                            transition
+                                            duration-200
+                                            group-hover/card:-translate-y-3
+                                            group-hover/card:scale-[1.03]
+                                            group-hover/card:border-white/30
+                                          "
+                                        >
+                                          {cardImage ? (
+                                            <img
+                                              src={cardImage}
+                                              alt={cardName}
+                                              loading="lazy"
+                                              className="h-full w-full object-cover"
+                                            />
+                                          ) : (
+                                            <div className="flex h-full items-center justify-center p-4 text-center">
+                                              <p className="text-xs leading-5 text-white/35">
+                                                {cardName}
+                                              </p>
+                                            </div>
+                                          )}
+
+                                          <span
+                                            className="
+                                              absolute left-2 top-2
+                                              rounded-lg
+                                              border border-white/15
+                                              bg-black/80
+                                              px-2 py-1
+                                              text-xs font-semibold
+                                              text-white/85
+                                              shadow-lg
+                                              backdrop-blur-sm
+                                            "
+                                          >
+                                            {row.quantity}x
+                                          </span>
+
+                                          {row.board !== "mainboard" && (
+                                            <span
+                                              className="
+                                                absolute bottom-2 left-2
+                                                rounded-md
+                                                border border-white/10
+                                                bg-black/75
+                                                px-2 py-1
+                                                text-[9px]
+                                                uppercase
+                                                tracking-[0.12em]
+                                                text-white/60
+                                                backdrop-blur-sm
+                                              "
+                                            >
+                                              {getBoardLabel(row.board)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </section>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {viewMode === "Stack" && organizeBy !== "Tipo" && (
+                      <div
+                        className="
+                          grid
+                          grid-cols-3 gap-3
+                          sm:grid-cols-4
+                          md:grid-cols-5
+                          lg:grid-cols-6
+                          xl:grid-cols-7
+                          2xl:grid-cols-8
+                        "
+                      >
+                        {visibleDeckCards.map((row) => {
+                          const cardImage = getProxiedCardImage(row.card);
+                          const cardName =
+                            row.card?.name ??
+                            `Carta ${row.scryfall_id.slice(0, 8)}…`;
+
+                          return (
+                            <div
+                              key={`${row.scryfall_id}-${row.board}`}
+                              className="group min-w-0"
+                            >
+                              <div
+                                className="
+                                  relative aspect-[488/680]
+                                  overflow-hidden
+                                  rounded-[4.6%]
+                                  border border-white/10
+                                  bg-[#121216]
+                                  shadow-lg
+                                  transition
+                                  duration-200
+                                  group-hover:-translate-y-1
+                                  group-hover:border-white/25
+                                  group-hover:shadow-2xl
+                                "
+                              >
+                                {cardImage ? (
+                                  <img
+                                    src={cardImage}
+                                    alt={cardName}
+                                    loading="lazy"
+                                    className="
+                                      h-full w-full
+                                      object-cover
+                                      transition duration-200
+                                      group-hover:scale-[1.015]
+                                    "
+                                  />
+                                ) : (
+                                  <div className="flex h-full items-center justify-center p-4 text-center">
+                                    <p className="text-xs leading-5 text-white/35">
+                                      {cardName}
+                                    </p>
+                                  </div>
+                                )}
+
+                                <span
+                                  className="
+                                    absolute left-2 top-2
+                                    rounded-lg
+                                    border border-white/15
+                                    bg-black/80
+                                    px-2 py-1
+                                    text-xs font-semibold
+                                    text-white/85
+                                    shadow-lg
+                                    backdrop-blur-sm
+                                  "
+                                >
+                                  {row.quantity}x
+                                </span>
+
+                                {row.board !== "mainboard" && (
+                                  <span
+                                    className="
+                                      absolute bottom-2 left-2
+                                      rounded-md
+                                      border border-white/10
+                                      bg-black/75
+                                      px-2 py-1
+                                      text-[9px]
+                                      uppercase
+                                      tracking-[0.12em]
+                                      text-white/60
+                                      backdrop-blur-sm
+                                    "
+                                  >
+                                    {getBoardLabel(row.board)}
+                                  </span>
+                                )}
+
+                                <div
+                                  className="
+                                    pointer-events-none
+                                    absolute inset-x-0 bottom-0
+                                    translate-y-full
+                                    bg-gradient-to-t
+                                    from-black/95 via-black/70 to-transparent
+                                    px-3 pb-3 pt-10
+                                    transition-transform
+                                    duration-200
+                                    group-hover:translate-y-0
+                                  "
+                                >
+                                  <p className="line-clamp-2 text-xs font-medium leading-4 text-white">
+                                    {cardName}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {viewMode === "Linha" && (
+                      <div className="space-y-2">
+                        {visibleDeckCards.map((row) => {
+                          const cardImage = getProxiedCardImage(row.card);
+                          const cardName =
+                            row.card?.name ??
+                            `Carta ${row.scryfall_id.slice(0, 8)}…`;
+
+                          return (
+                            <div
+                              key={`${row.scryfall_id}-${row.board}`}
+                              className="
+                                flex items-center gap-3
+                                rounded-xl
+                                border border-white/10
+                                bg-white/[0.02]
+                                p-2
+                              "
+                            >
+                              <div
+                                className="
+                                  h-[72px] w-[52px]
+                                  shrink-0 overflow-hidden
+                                  rounded-md
+                                  border border-white/10
+                                  bg-[#121216]
+                                "
+                              >
+                                {cardImage ? (
+                                  <img
+                                    src={cardImage}
+                                    alt=""
+                                    loading="lazy"
+                                    className="h-full w-full object-cover"
+                                  />
+                                ) : null}
+                              </div>
+
+                              <span className="flex h-8 min-w-8 items-center justify-center rounded-lg border border-white/10 bg-black/25 px-2 text-xs text-white/55">
+                                {row.quantity}x
+                              </span>
+
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm text-white/75">
+                                  {cardName}
+                                </p>
+
+                                <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-white/20">
+                                  {getBoardLabel(row.board)}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {viewMode === "Texto" && (
+                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                        {visibleDeckCards.map((row) => (
+                          <div
+                            key={`${row.scryfall_id}-${row.board}`}
+                            className="
+                              flex items-center gap-3
+                              rounded-xl
+                              border border-white/10
+                              bg-white/[0.02]
+                              px-4 py-3
+                            "
+                          >
+                            <span className="flex h-8 min-w-8 items-center justify-center rounded-lg border border-white/10 bg-black/25 px-2 text-xs text-white/55">
+                              {row.quantity}x
+                            </span>
+
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm text-white/70">
+                                {row.card?.name ??
+                                  `Carta ${row.scryfall_id.slice(0, 8)}…`}
+                              </p>
+
+                              <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-white/20">
+                                {getBoardLabel(row.board)}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {visibleDeckCards.length === 0 && (
+                      <p className="py-12 text-sm text-white/30">
+                        Nenhuma carta encontrada para essa busca.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </section>
@@ -1549,7 +2756,7 @@ export default function DeckPage() {
                   </div>
 
                   <span className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-white/30">
-                    0 cartas
+                    {deckCardTotal} cartas
                   </span>
                 </div>
 
@@ -1584,13 +2791,13 @@ export default function DeckPage() {
 4 Forest`}</pre>
               </div>
 
-              <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">
-                <p className="text-xs leading-5 text-white/25">
-                  O deck ainda está vazio. Quando as cartas estiverem ligadas
-                  ao deck, esta exportação passará a incluir automaticamente
-                  quantidade, nome e seções como Commander, Deck e Sideboard.
-                </p>
-              </div>
+              {deckCardTotal === 0 && (
+                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">
+                  <p className="text-xs leading-5 text-white/25">
+                    O deck ainda está vazio. Importe cartas para gerar a lista.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-3 border-t border-white/10 px-6 py-5 sm:flex-row sm:items-center sm:justify-end md:px-8">
@@ -1706,7 +2913,13 @@ export default function DeckPage() {
                   {importText && (
                     <button
                       type="button"
-                      onClick={() => setImportText("")}
+                      onClick={() => {
+                        setImportText("");
+                        setImportPrepared(false);
+                        setImportResult("");
+                        setImportMissingCards([]);
+                        setImportMissingCopied(false);
+                      }}
                       className="text-xs text-white/35 transition hover:text-white"
                     >
                       Limpar
@@ -1716,7 +2929,13 @@ export default function DeckPage() {
 
                 <textarea
                   value={importText}
-                  onChange={(event) => setImportText(event.target.value)}
+                  onChange={(event) => {
+                    setImportText(event.target.value);
+                    setImportPrepared(false);
+                    setImportResult("");
+                    setImportMissingCards([]);
+                    setImportMissingCopied(false);
+                  }}
                   placeholder={`Commander
 1 Atraxa, Praetors' Voice
 
@@ -1788,6 +3007,93 @@ Sideboard
                 </div>
 
                 <div className="mt-5 max-h-[470px] overflow-y-auto pr-1">
+                  {importMissingCards.length > 0 && (
+                    <div
+                      className="
+                        mb-4
+                        rounded-xl
+                        border border-amber-200/15
+                        bg-amber-200/[0.035]
+                        p-4
+                      "
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-100/65">
+                            Não importadas
+                          </p>
+
+                          <p className="mt-1 text-xs leading-5 text-white/35">
+                            Estas cartas não foram encontradas pelo Scryfall e
+                            não entraram no deck.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={copyMissingImportCards}
+                          className="
+                            shrink-0 rounded-lg
+                            border border-amber-100/15
+                            px-3 py-2
+                            text-xs text-amber-100/55
+                            transition
+                            hover:border-amber-100/30
+                            hover:text-amber-50
+                          "
+                        >
+                          {importMissingCopied ? "Copiado!" : "Copiar lista"}
+                        </button>
+                      </div>
+
+                      <div className="mt-4 space-y-2">
+                        {importMissingCards.map((card) => (
+                          <div
+                            key={`${card.board}-${card.name}`}
+                            className="
+                              flex items-center justify-between gap-4
+                              rounded-lg
+                              border border-white/8
+                              bg-black/20
+                              px-3 py-2.5
+                            "
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm text-white/75">
+                                {card.name}
+                              </p>
+
+                              <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-white/25">
+                                {card.board === "commander"
+                                  ? "Comandante"
+                                  : card.board === "sideboard"
+                                    ? "Sideboard"
+                                    : card.board === "maybeboard"
+                                      ? "Maybeboard"
+                                      : "Deck"}
+                              </p>
+                            </div>
+
+                            <span
+                              className="
+                                shrink-0 rounded-lg
+                                border border-white/10
+                                px-2.5 py-1.5
+                                text-xs text-white/45
+                              "
+                            >
+                              {card.quantity}x
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <p className="mt-3 text-[11px] leading-5 text-white/25">
+                        Corrija o nome na lista e importe novamente.
+                      </p>
+                    </div>
+                  )}
+
                   {parsedImport.cards.length === 0 ? (
                     <div
                       className="
@@ -1883,11 +3189,28 @@ Sideboard
 
             {/* RODAPÉ */}
             <div className="flex flex-col gap-4 border-t border-white/10 px-6 py-5 md:flex-row md:items-center md:justify-between md:px-8">
-              <p className="max-w-2xl text-xs leading-5 text-white/25">
-                Nesta etapa o CurveOut já interpreta a lista. A próxima parte
-                será resolver cada nome no Scryfall e gravar as cartas em
-                deck_cards.
-              </p>
+              <div className="max-w-2xl">
+                {importResult ? (
+                  <p
+                    className={`text-xs leading-5 ${
+                      importResult.startsWith("Erro:")
+                        ? "text-red-300/70"
+                        : importMissingCards.length > 0
+                          ? "text-amber-100/65"
+                          : importPrepared
+                            ? "text-white/60"
+                            : "text-white/35"
+                    }`}
+                  >
+                    {importResult}
+                  </p>
+                ) : (
+                  <p className="text-xs leading-5 text-white/25">
+                    Clique em “Importar” para consultar os nomes no Scryfall e
+                    gravar as cartas deste deck em deck_cards.
+                  </p>
+                )}
+              </div>
 
               <div className="flex shrink-0 gap-2">
                 <button
@@ -1906,8 +3229,12 @@ Sideboard
 
                 <button
                   type="button"
-                  disabled={parsedImport.cards.length === 0}
-                  title="A conexão com o Scryfall será ligada na próxima etapa."
+                  onClick={importCardsToDeck}
+                  disabled={
+                    parsedImport.cards.length === 0 ||
+                    importingCards ||
+                    importPrepared
+                  }
                   className="
                     rounded-lg
                     bg-[#f4f1e8]
@@ -1917,10 +3244,14 @@ Sideboard
                     transition
                     hover:bg-white
                     disabled:cursor-not-allowed
-                    disabled:opacity-35
+                    disabled:opacity-55
                   "
                 >
-                  Preparar {parsedImport.totalCopies || ""} cartas
+                  {importingCards
+                    ? "Importando..."
+                    : importPrepared
+                      ? `${parsedImport.totalCopies} cartas importadas ✓`
+                      : `Importar ${parsedImport.totalCopies || ""} cartas`}
                 </button>
               </div>
             </div>
