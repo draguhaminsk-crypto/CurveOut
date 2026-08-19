@@ -1,7 +1,14 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element */
+
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase/client";
 
@@ -19,6 +26,99 @@ const formats = [
   "Outro",
 ];
 
+type ScryfallImageUris = {
+  small?: string;
+  normal?: string;
+  large?: string;
+};
+
+type ScryfallCardFace = {
+  name?: string;
+  image_uris?: ScryfallImageUris;
+};
+
+type ScryfallCard = {
+  id: string;
+  oracle_id?: string;
+  name: string;
+  type_line?: string;
+  mana_cost?: string;
+  set?: string;
+  set_name?: string;
+  collector_number?: string;
+  image_uris?: ScryfallImageUris;
+  card_faces?: ScryfallCardFace[];
+};
+
+type ScryfallSearchResponse = {
+  data?: ScryfallCard[];
+  details?: string;
+};
+
+type ImportedCard = {
+  quantity: number;
+  name: string;
+};
+
+function getCardImage(card: ScryfallCard) {
+  return (
+    card.image_uris?.normal ??
+    card.image_uris?.large ??
+    card.card_faces?.find((face) => face.image_uris?.normal)?.image_uris
+      ?.normal ??
+    card.card_faces?.find((face) => face.image_uris?.large)?.image_uris
+      ?.large ??
+    null
+  );
+}
+
+function cleanImportedCardName(rawName: string) {
+  return rawName
+    .replace(/\s+\([A-Z0-9]{2,8}\)\s+\S+\s*$/i, "")
+    .replace(/\s+\[[A-Z0-9]{2,8}\]\s*$/i, "")
+    .trim();
+}
+
+function parseImportedList(value: string): ImportedCard[] {
+  const ignoredHeadings = new Set([
+    "commander",
+    "commanders",
+    "deck",
+    "mainboard",
+    "sideboard",
+    "maybeboard",
+    "considering",
+    "companion",
+  ]);
+
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const normalizedLine = line.replace(/^[-•]\s*/, "").trim();
+
+      if (ignoredHeadings.has(normalizedLine.toLowerCase())) {
+        return [];
+      }
+
+      const match = normalizedLine.match(/^(\d+)\s*x?\s+(.+)$/i);
+
+      if (!match) {
+        return [];
+      }
+
+      const quantity = Number(match[1]);
+      const name = cleanImportedCardName(match[2]);
+
+      if (!quantity || !name) {
+        return [];
+      }
+
+      return [{ quantity, name }];
+    });
+}
+
 export default function NovoDeckPage() {
   const router = useRouter();
   const [supabase] = useState(() => createClient());
@@ -27,9 +127,33 @@ export default function NovoDeckPage() {
   const [format, setFormat] = useState("Commander");
   const [isPublic, setIsPublic] = useState(true);
 
+  const [commanderSearch, setCommanderSearch] = useState("");
+  const [commanderResults, setCommanderResults] = useState<ScryfallCard[]>([]);
+  const [selectedCommander, setSelectedCommander] =
+    useState<ScryfallCard | null>(null);
+  const [commanderLoading, setCommanderLoading] = useState(false);
+  const [commanderError, setCommanderError] = useState("");
+
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
+
   const [checkingUser, setCheckingUser] = useState(true);
   const [creating, setCreating] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+
+  const importedCards = useMemo(
+    () => parseImportedList(importText),
+    [importText]
+  );
+
+  const importedQuantity = useMemo(
+    () =>
+      importedCards.reduce(
+        (total, importedCard) => total + importedCard.quantity,
+        0
+      ),
+    [importedCards]
+  );
 
   useEffect(() => {
     async function checkUser() {
@@ -47,6 +171,101 @@ export default function NovoDeckPage() {
 
     checkUser();
   }, [router, supabase]);
+
+  useEffect(() => {
+    if (format === "Commander") return;
+
+    setCommanderSearch("");
+    setCommanderResults([]);
+    setSelectedCommander(null);
+    setCommanderError("");
+  }, [format]);
+
+  useEffect(() => {
+    if (format !== "Commander") return;
+
+    const query = commanderSearch.trim();
+
+    if (query.length < 2) {
+      setCommanderResults([]);
+      setCommanderLoading(false);
+      setCommanderError("");
+      return;
+    }
+
+    if (selectedCommander && query === selectedCommander.name) {
+      setCommanderResults([]);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const timer = window.setTimeout(async () => {
+      setCommanderLoading(true);
+      setCommanderError("");
+
+      try {
+        const scryfallQuery = `${query} is:commander game:paper`;
+        const response = await fetch(
+          `https://api.scryfall.com/cards/search?q=${encodeURIComponent(
+            scryfallQuery
+          )}&unique=cards&order=name`,
+          {
+            signal: controller.signal,
+          }
+        );
+
+        const result = (await response.json()) as ScryfallSearchResponse;
+
+        if (!response.ok) {
+          setCommanderResults([]);
+
+          if (response.status === 404) {
+            setCommanderError("Nenhum comandante encontrado.");
+          } else {
+            setCommanderError(
+              result.details || "Não foi possível buscar no Scryfall."
+            );
+          }
+
+          return;
+        }
+
+        setCommanderResults((result.data ?? []).slice(0, 8));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        console.error("Erro ao buscar comandante:", error);
+        setCommanderResults([]);
+        setCommanderError("Não foi possível buscar no Scryfall.");
+      } finally {
+        if (!controller.signal.aborted) {
+          setCommanderLoading(false);
+        }
+      }
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [commanderSearch, format, selectedCommander]);
+
+  function selectCommander(card: ScryfallCard) {
+    setSelectedCommander(card);
+    setCommanderSearch(card.name);
+    setCommanderResults([]);
+    setCommanderError("");
+  }
+
+  function clearCommander() {
+    setSelectedCommander(null);
+    setCommanderSearch("");
+    setCommanderResults([]);
+    setCommanderError("");
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -78,16 +297,24 @@ export default function NovoDeckPage() {
         name: cleanName,
         format,
         is_public: isPublic,
+        commander_scryfall_id:
+          format === "Commander" ? selectedCommander?.id ?? null : null,
       })
       .select("id")
       .single();
 
     if (error) {
-  console.error("Erro ao criar deck:", error);
-  setErrorMessage(`Erro: ${error.message}`);
-  setCreating(false);
-  return;
-}
+      console.error("Erro ao criar deck:", error);
+      setErrorMessage(`Erro: ${error.message}`);
+      setCreating(false);
+      return;
+    }
+
+    /*
+      Por enquanto a área de importação só interpreta e conta a lista.
+      No próximo passo vamos usar deck_cards para resolver essas cartas
+      no Scryfall e gravá-las automaticamente no deck recém-criado.
+    */
 
     router.push(`/decks/${data.id}`);
   }
@@ -104,11 +331,11 @@ export default function NovoDeckPage() {
     <main className="min-h-screen bg-[#0b0b0d] px-6 py-10 text-[#f4f1e8] md:px-10">
       <div className="mx-auto max-w-3xl">
         <Link
-  href="/"
-  className="text-sm text-white/40 transition hover:text-white"
->
-  ← CurveOut
-</Link>
+          href="/"
+          className="text-sm text-white/40 transition hover:text-white"
+        >
+          ← CurveOut
+        </Link>
 
         <header className="mt-10 border-b border-white/10 pb-8">
           <p className="text-xs uppercase tracking-[0.22em] text-white/30">
@@ -120,8 +347,7 @@ export default function NovoDeckPage() {
           </h1>
 
           <p className="mt-4 max-w-xl leading-7 text-white/40">
-            Dê um nome ao seu deck e escolha o formato. Depois você poderá
-            adicionar as cartas.
+            Dê um nome ao seu deck, escolha o formato e comece a construir.
           </p>
         </header>
 
@@ -142,20 +368,9 @@ export default function NovoDeckPage() {
               onChange={(event) => setName(event.target.value)}
               maxLength={80}
               autoFocus
+              autoComplete="off"
               placeholder="Ex: Sauron Reanimator"
-              className="
-                mt-3
-                w-full
-                rounded-xl
-                border border-white/10
-                bg-white/[0.035]
-                px-4 py-3.5
-                text-[#f4f1e8]
-                outline-none
-                transition
-                placeholder:text-white/20
-                focus:border-white/30
-              "
+              className="mt-3 w-full rounded-xl border border-white/10 bg-white/[0.035] px-4 py-3.5 text-[#f4f1e8] outline-none transition placeholder:text-white/20 focus:border-white/30"
             />
 
             <div className="mt-2 text-right text-xs text-white/20">
@@ -176,18 +391,7 @@ export default function NovoDeckPage() {
               id="deck-format"
               value={format}
               onChange={(event) => setFormat(event.target.value)}
-              className="
-                mt-3
-                w-full
-                rounded-xl
-                border border-white/10
-                bg-[#111114]
-                px-4 py-3.5
-                text-[#f4f1e8]
-                outline-none
-                transition
-                focus:border-white/30
-              "
+              className="mt-3 w-full rounded-xl border border-white/10 bg-[#111114] px-4 py-3.5 text-[#f4f1e8] outline-none transition focus:border-white/30"
             >
               {formats.map((deckFormat) => (
                 <option key={deckFormat} value={deckFormat}>
@@ -195,6 +399,217 @@ export default function NovoDeckPage() {
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* COMANDANTE */}
+          {format === "Commander" && (
+            <div className="mt-8">
+              <div className="flex items-end justify-between gap-4">
+                <div>
+                  <label
+                    htmlFor="commander-search"
+                    className="text-sm font-medium text-white/70"
+                  >
+                    Comandante
+                  </label>
+
+                  <p className="mt-1 text-xs text-white/25">
+                    Busque uma carta válida como comandante.
+                  </p>
+                </div>
+
+                {selectedCommander && (
+                  <button
+                    type="button"
+                    onClick={clearCommander}
+                    className="text-xs text-white/35 transition hover:text-white"
+                  >
+                    Remover
+                  </button>
+                )}
+              </div>
+
+              <div className="relative mt-3">
+                <input
+                  id="commander-search"
+                  type="text"
+                  value={commanderSearch}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setCommanderSearch(value);
+
+                    if (
+                      selectedCommander &&
+                      value !== selectedCommander.name
+                    ) {
+                      setSelectedCommander(null);
+                    }
+                  }}
+                  autoComplete="off"
+                  placeholder="Ex: Sauron, the Dark Lord"
+                  className="w-full rounded-xl border border-white/10 bg-white/[0.035] px-4 py-3.5 pr-28 text-[#f4f1e8] outline-none transition placeholder:text-white/20 focus:border-white/30"
+                />
+
+                {commanderLoading && (
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-white/30">
+                    Buscando...
+                  </span>
+                )}
+
+                {!selectedCommander && commanderResults.length > 0 && (
+                  <div className="absolute z-20 mt-2 max-h-[420px] w-full overflow-y-auto rounded-xl border border-white/10 bg-[#111114] p-2 shadow-2xl shadow-black/50">
+                    {commanderResults.map((card) => {
+                      const cardImage = getCardImage(card);
+
+                      return (
+                        <button
+                          key={card.id}
+                          type="button"
+                          onClick={() => selectCommander(card)}
+                          className="flex w-full items-center gap-4 rounded-lg p-3 text-left transition hover:bg-white/[0.06]"
+                        >
+                          <div className="h-16 w-12 shrink-0 overflow-hidden rounded-md border border-white/10 bg-white/[0.04]">
+                            {cardImage ? (
+                              <img
+                                src={cardImage}
+                                alt={card.name}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : null}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-medium text-white/85">
+                              {card.name}
+                            </p>
+
+                            <p className="mt-1 truncate text-xs text-white/35">
+                              {card.type_line || "Magic card"}
+                            </p>
+
+                            <p className="mt-1 text-xs text-white/20">
+                              {card.set_name || card.set?.toUpperCase()}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {commanderError && !selectedCommander && (
+                <p className="mt-2 text-xs text-red-300/80">
+                  {commanderError}
+                </p>
+              )}
+
+              {selectedCommander && (
+                <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
+                  <div className="flex flex-col gap-5 p-5 sm:flex-row sm:items-center">
+                    {getCardImage(selectedCommander) && (
+                      <img
+                        src={getCardImage(selectedCommander) ?? ""}
+                        alt={selectedCommander.name}
+                        className="w-24 shrink-0 rounded-[7%] shadow-lg shadow-black/40"
+                      />
+                    )}
+
+                    <div className="min-w-0">
+                      <p className="text-xs uppercase tracking-[0.2em] text-white/25">
+                        Comandante escolhido
+                      </p>
+
+                      <h2 className="mt-2 text-xl font-semibold text-[#f4f1e8]">
+                        {selectedCommander.name}
+                      </h2>
+
+                      <p className="mt-2 text-sm text-white/40">
+                        {selectedCommander.type_line}
+                      </p>
+
+                      {selectedCommander.set_name && (
+                        <p className="mt-2 text-xs text-white/25">
+                          {selectedCommander.set_name}
+                          {selectedCommander.collector_number
+                            ? ` · #${selectedCommander.collector_number}`
+                            : ""}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* IMPORTAR LISTA */}
+          <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.015]">
+            <button
+              type="button"
+              onClick={() => setShowImport((current) => !current)}
+              className="flex w-full items-center justify-between gap-6 p-5 text-left"
+            >
+              <div>
+                <div className="flex items-center gap-3">
+                  <p className="text-sm font-medium text-white/70">
+                    Importar lista
+                  </p>
+
+                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-white/25">
+                    Opcional
+                  </span>
+                </div>
+
+                <p className="mt-1 text-xs text-white/25">
+                  Cole uma decklist para preparar várias cartas de uma vez.
+                </p>
+              </div>
+
+              <span className="text-lg text-white/30">
+                {showImport ? "−" : "+"}
+              </span>
+            </button>
+
+            {showImport && (
+              <div className="border-t border-white/10 p-5">
+                <textarea
+                  value={importText}
+                  onChange={(event) => setImportText(event.target.value)}
+                  rows={9}
+                  spellCheck={false}
+                  placeholder={`1 Sol Ring\n1 Arcane Signet\n1 Command Tower\n1 Counterspell`}
+                  className="w-full resize-y rounded-xl border border-white/10 bg-[#111114] px-4 py-3.5 font-mono text-sm leading-6 text-[#f4f1e8] outline-none transition placeholder:text-white/15 focus:border-white/30"
+                />
+
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-xs text-white/25">
+                    Formatos aceitos por enquanto: “1 Sol Ring” e “1x Sol Ring”.
+                  </p>
+
+                  {importText.trim() && (
+                    <div className="text-right">
+                      <p className="text-sm text-white/60">
+                        {importedQuantity} carta
+                        {importedQuantity === 1 ? "" : "s"} reconhecida
+                        {importedQuantity === 1 ? "" : "s"}
+                      </p>
+
+                      <p className="mt-0.5 text-xs text-white/25">
+                        {importedCards.length} nome
+                        {importedCards.length === 1 ? "" : "s"} na lista
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 rounded-lg border border-amber-200/10 bg-amber-200/[0.025] px-4 py-3 text-xs leading-5 text-white/30">
+                  Nesta versão, a lista já é interpretada e contada. No próximo
+                  passo vamos conectar isso ao Scryfall e à tabela de cartas do
+                  deck para fazer a importação automática.
+                </div>
+              </div>
+            )}
           </div>
 
           {/* VISIBILIDADE */}
@@ -205,14 +620,11 @@ export default function NovoDeckPage() {
               <button
                 type="button"
                 onClick={() => setIsPublic(true)}
-                className={`
-                  rounded-xl border p-4 text-left transition
-                  ${
-                    isPublic
-                      ? "border-white/30 bg-white/[0.07]"
-                      : "border-white/10 bg-white/[0.02] hover:border-white/20"
-                  }
-                `}
+                className={`rounded-xl border p-4 text-left transition ${
+                  isPublic
+                    ? "border-white/30 bg-white/[0.07]"
+                    : "border-white/10 bg-white/[0.02] hover:border-white/20"
+                }`}
               >
                 <p className="font-medium text-white/85">Público</p>
 
@@ -224,14 +636,11 @@ export default function NovoDeckPage() {
               <button
                 type="button"
                 onClick={() => setIsPublic(false)}
-                className={`
-                  rounded-xl border p-4 text-left transition
-                  ${
-                    !isPublic
-                      ? "border-white/30 bg-white/[0.07]"
-                      : "border-white/10 bg-white/[0.02] hover:border-white/20"
-                  }
-                `}
+                className={`rounded-xl border p-4 text-left transition ${
+                  !isPublic
+                    ? "border-white/30 bg-white/[0.07]"
+                    : "border-white/10 bg-white/[0.02] hover:border-white/20"
+                }`}
               >
                 <p className="font-medium text-white/85">Privado</p>
 
@@ -248,33 +657,17 @@ export default function NovoDeckPage() {
 
           {/* AÇÕES */}
           <div className="mt-10 flex flex-wrap items-center justify-end gap-3 border-t border-white/10 pt-8">
-            <a
+            <Link
               href="/meus-decks"
-              className="
-                rounded-lg
-                px-5 py-2.5
-                text-sm text-white/45
-                transition
-                hover:text-white
-              "
+              className="rounded-lg px-5 py-2.5 text-sm text-white/45 transition hover:text-white"
             >
               Cancelar
-            </a>
+            </Link>
 
             <button
               type="submit"
               disabled={creating || !name.trim()}
-              className="
-                rounded-lg
-                bg-[#f4f1e8]
-                px-6 py-2.5
-                text-sm font-semibold
-                text-black
-                transition
-                hover:bg-white
-                disabled:cursor-not-allowed
-                disabled:opacity-35
-              "
+              className="rounded-lg bg-[#f4f1e8] px-6 py-2.5 text-sm font-semibold text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35"
             >
               {creating ? "Criando..." : "Criar deck"}
             </button>
