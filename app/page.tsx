@@ -362,6 +362,97 @@ export default async function Home() {
           </div>
         </section>
       </main>
+
+      <footer className="border-t border-white/10 px-6 py-12 md:px-10">
+        <div className="mx-auto max-w-7xl">
+          <div className="grid gap-10 md:grid-cols-[1.2fr_1fr] md:items-start">
+            <div>
+              <a
+                href="/"
+                className={`${cinzel.className} text-2xl font-bold uppercase tracking-[0.015em]`}
+              >
+                CurveOut
+              </a>
+
+              <p className="mt-3 max-w-sm text-sm leading-6 text-white/40">
+                Mas bah
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-8 text-sm sm:grid-cols-3">
+              <div>
+                <p className="mb-3 text-xs uppercase tracking-[0.18em] text-white/25">
+                  Navegar
+                </p>
+
+                <div className="flex flex-col gap-2.5 text-white/50">
+                  <a href="/decks" className="transition hover:text-white">
+                    Decks
+                  </a>
+                  <a href="/cartas" className="transition hover:text-white">
+                    Cartas
+                  </a>
+                  <a href="/colecoes" className="transition hover:text-white">
+                    Coleções
+                  </a>
+                  <a href="/explorar" className="transition hover:text-white">
+                    Explorar
+                  </a>
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-3 text-xs uppercase tracking-[0.18em] text-white/25">
+                  Conta
+                </p>
+
+                <div className="flex flex-col gap-2.5 text-white/50">
+                  <a href="/perfil" className="transition hover:text-white">
+                    Perfil
+                  </a>
+                  <a href="/meus-decks" className="transition hover:text-white">
+                    Meus decks
+                  </a>
+                  <a href="/decks/novo" className="transition hover:text-white">
+                    Criar deck
+                  </a>
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-3 text-xs uppercase tracking-[0.18em] text-white/25">
+                  CurveOut
+                </p>
+
+                <div className="flex flex-col gap-2.5 text-white/50">
+                  <a
+                    href="mailto:curveoutcg@gmail.com"
+                    className="transition hover:text-white"
+                  >
+                    Contato
+                  </a>
+                  <a href="/termos" className="transition hover:text-white">
+                    Termos
+                  </a>
+                  <a href="/privacidade" className="transition hover:text-white">
+                    Privacidade
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-12 flex flex-col gap-4 border-t border-white/10 pt-6 text-xs leading-5 text-white/25 md:flex-row md:items-end md:justify-between">
+            <p>© 2026 CurveOut.</p>
+
+            <p className="max-w-2xl md:text-right">
+              Magic: The Gathering e suas marcas relacionadas pertencem à
+              Wizards of the Coast. CurveOut é um projeto independente e não é
+              afiliado, endossado ou patrocinado pela Wizards of the Coast.
+            </p>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
