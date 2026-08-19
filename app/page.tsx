@@ -2,7 +2,6 @@ import { Cinzel } from "next/font/google";
 
 import CommanderPrintCarousel from "./components/CommanderPrintCarousel";
 import type { CommanderPrint } from "./components/CommanderPrintCarousel";
-import UserMenu from "./components/UserMenu";
 
 const cinzel = Cinzel({
   subsets: ["latin"],
@@ -210,7 +209,7 @@ export default async function Home() {
           CurveOut
         </a>
 
-        <nav className="hidden items-center gap-8 text-sm text-white/65 md:flex">
+        <nav className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-8 text-sm md:flex">
           <a
             href="/decks"
             className="transition hover:text-white"
@@ -240,7 +239,6 @@ export default async function Home() {
           </a>
         </nav>
 
-        <UserMenu />
       </header>
 
       <main>
