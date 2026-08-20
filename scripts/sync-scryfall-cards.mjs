@@ -144,14 +144,14 @@ async function getOracleCardsDownloadUrl() {
     );
   }
 
-  if (!oracleBulk.json_download_uri) {
+  if (!oracleBulk.jsonl_download_uri) {
   console.log(
     "Objeto Oracle Cards recebido:",
     JSON.stringify(oracleBulk, null, 2)
   );
 
   throw new Error(
-    "Oracle Cards foi encontrado, mas não possui json_download_uri."
+    "Oracle Cards foi encontrado, mas não possui jsonl_download_uri."
   );
 }
 
@@ -163,7 +163,7 @@ async function getOracleCardsDownloadUrl() {
     `Última atualização: ${oracleBulk.updated_at ?? "desconhecida"}`
   );
 
-  return oracleBulk.json_download_uri;
+  return oracleBulk.jsonl_download_uri;
 }
 
 async function upsertBatch(
