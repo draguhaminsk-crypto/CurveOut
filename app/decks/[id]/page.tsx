@@ -407,6 +407,13 @@ export default function DeckPage() {
   const [cardSearchError, setCardSearchError] = useState("");
   const [cardSearchStatus, setCardSearchStatus] = useState("");
   const [addingCard, setAddingCard] = useState(false);
+  const [settingCommanderId, setSettingCommanderId] = useState<string | null>(
+    null
+  );
+  const [hoveredStackCard, setHoveredStackCard] = useState<{
+  group: string;
+  index: number;
+} | null>(null);
   const [highlightedCardIndex, setHighlightedCardIndex] = useState(0);
   const [deckSearch, setDeckSearch] = useState("");
   const [organizeBy, setOrganizeBy] = useState("Tipo");
@@ -919,6 +926,153 @@ export default function DeckPage() {
       }, 1800);
     } catch (error) {
       console.error("Erro ao copiar cartas não encontradas:", error);
+    }
+  }
+
+  async function setCardAsCommander(row: DeckCardRow) {
+    if (
+      !deck ||
+      !isOwner ||
+      !row.id ||
+      row.board === "commander" ||
+      settingCommanderId
+    ) {
+      return;
+    }
+
+    setSettingCommanderId(row.scryfall_id);
+    setErrorMessage("");
+
+    try {
+      const currentCommanders = deckCards.filter(
+        (card) => card.board === "commander"
+      );
+
+      // Por enquanto o CurveOut trabalha com 1 comandante principal.
+      // Se já existir outro, ele volta para o mainboard.
+      for (const currentCommander of currentCommanders) {
+        if (!currentCommander.id) continue;
+
+        const existingMainboardCopy = deckCards.find(
+          (card) =>
+            card.board === "mainboard" &&
+            card.scryfall_id === currentCommander.scryfall_id
+        );
+
+        if (existingMainboardCopy?.id) {
+          const { error: mergeError } = await supabase
+            .from("deck_cards")
+            .update({
+              quantity:
+                existingMainboardCopy.quantity +
+                currentCommander.quantity,
+            })
+            .eq("id", existingMainboardCopy.id)
+            .eq("deck_id", deck.id);
+
+          if (mergeError) {
+            throw mergeError;
+          }
+
+          const { error: deleteCommanderError } = await supabase
+            .from("deck_cards")
+            .delete()
+            .eq("id", currentCommander.id)
+            .eq("deck_id", deck.id);
+
+          if (deleteCommanderError) {
+            throw deleteCommanderError;
+          }
+        } else {
+          const { error: moveOldCommanderError } = await supabase
+            .from("deck_cards")
+            .update({
+              board: "mainboard",
+            })
+            .eq("id", currentCommander.id)
+            .eq("deck_id", deck.id);
+
+          if (moveOldCommanderError) {
+            throw moveOldCommanderError;
+          }
+        }
+      }
+
+      // Se a entrada tiver mais de 1 cópia, deixa as cópias restantes
+      // onde estavam e move apenas 1 para a command zone.
+      if (row.quantity > 1) {
+        const { error: reduceError } = await supabase
+          .from("deck_cards")
+          .update({
+            quantity: row.quantity - 1,
+          })
+          .eq("id", row.id)
+          .eq("deck_id", deck.id);
+
+        if (reduceError) {
+          throw reduceError;
+        }
+
+        const { error: insertCommanderError } = await supabase
+          .from("deck_cards")
+          .insert({
+            deck_id: deck.id,
+            scryfall_id: row.scryfall_id,
+            oracle_id: row.oracle_id,
+            quantity: 1,
+            board: "commander",
+          });
+
+        if (insertCommanderError) {
+          throw insertCommanderError;
+        }
+      } else {
+        const { error: moveCommanderError } = await supabase
+          .from("deck_cards")
+          .update({
+            board: "commander",
+          })
+          .eq("id", row.id)
+          .eq("deck_id", deck.id);
+
+        if (moveCommanderError) {
+          throw moveCommanderError;
+        }
+      }
+
+      const updatedAt = new Date().toISOString();
+
+      const { error: deckUpdateError } = await supabase
+        .from("decks")
+        .update({
+          commander_scryfall_id: row.scryfall_id,
+          updated_at: updatedAt,
+        })
+        .eq("id", deck.id)
+        .eq("owner_id", deck.owner_id);
+
+      if (deckUpdateError) {
+        throw deckUpdateError;
+      }
+
+      setDeck({
+        ...deck,
+        commander_scryfall_id: row.scryfall_id,
+        updated_at: updatedAt,
+      });
+
+      await loadDeckCards(deck.id);
+    } catch (error) {
+      console.error("Erro ao definir comandante:", error);
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível definir o comandante.";
+
+      setErrorMessage(`Erro: ${message}`);
+    } finally {
+      setSettingCommanderId(null);
     }
   }
 
@@ -1875,7 +2029,7 @@ export default function DeckPage() {
         )}
 
         {!editing && (
-          <section className="pt-10 pb-8">
+          <section className="pt-6 pb-8">
             {/* BARRA DO DECK */}
             <div className="rounded-2xl border border-white/10 bg-white/[0.015]">
               <div
@@ -2162,8 +2316,8 @@ export default function DeckPage() {
                       <div className="overflow-x-auto pb-4">
                         <div
                           className="
-                            flex min-w-max items-end gap-5
-                            px-1 pt-4
+                            flex min-w-max items-start gap-6
+                            px-6 pt-4
                           "
                         >
                           {deckCardsByType.map((group) => {
@@ -2176,7 +2330,7 @@ export default function DeckPage() {
                               <section
                                 key={group.name}
                                 className="
-                                  flex w-[190px] shrink-0
+                                  flex w-[250px] shrink-0
                                   flex-col
                                 "
                               >
@@ -2199,13 +2353,13 @@ export default function DeckPage() {
                                 <div
                                   className="
                                     relative
-                                    flex min-h-[560px]
-                                    flex-col-reverse
+                                    flex 
+                                    flex-col
                                     justify-start
                                     rounded-2xl
                                     border border-white/8
                                     bg-white/[0.012]
-                                    px-2 pb-2 pt-20
+                                    px-3 py-3
                                   "
                                 >
                                   {group.cards.map((row, index) => {
@@ -2217,23 +2371,42 @@ export default function DeckPage() {
 
                                     return (
                                       <div
-                                        key={`${row.scryfall_id}-${row.board}`}
-                                        className="
-                                          group/card
-                                          relative
-                                          mx-auto
-                                          w-[166px]
-                                          transition
-                                          duration-200
-                                          hover:z-40
-                                        "
-                                        style={{
-                                          marginTop:
-                                            index === group.cards.length - 1
-                                              ? 0
-                                              : -178,
-                                        }}
-                                      >
+  key={`${row.scryfall_id}-${row.board}`}
+  onMouseEnter={() =>
+    setHoveredStackCard({
+      group: group.name,
+      index,
+    })
+  }
+  onMouseLeave={() => setHoveredStackCard(null)}
+  className="
+    group/card
+    relative
+    mx-auto
+    w-[220px]
+    transition-transform
+    duration-200
+    ease-out
+  "
+  style={{
+    marginTop: index === 0 ? 0 : -220,
+
+    transform:
+      hoveredStackCard?.group === group.name
+        ? index < hoveredStackCard.index
+          ? "translateY(-90px)"
+          : index > hoveredStackCard.index
+            ? "translateY(170px)"
+            : "translateY(0)"
+        : "translateY(0)",
+
+    zIndex:
+      hoveredStackCard?.group === group.name &&
+      index === hoveredStackCard.index
+        ? 50
+        : index,
+  }}
+>
                                         <div
                                           className="
                                             relative aspect-[488/680]
@@ -2296,6 +2469,64 @@ export default function DeckPage() {
                                               "
                                             >
                                               {getBoardLabel(row.board)}
+                                            </span>
+                                          )}
+
+                                          {isOwner && row.board !== "commander" && (
+                                            <button
+                                              type="button"
+                                              onClick={(event) => {
+                                                event.stopPropagation();
+                                                void setCardAsCommander(row);
+                                              }}
+                                              disabled={
+                                                settingCommanderId ===
+                                                row.scryfall_id
+                                              }
+                                              className="
+                                                absolute bottom-2 right-2
+                                                translate-y-2
+                                                rounded-lg
+                                                border border-white/15
+                                                bg-black/85
+                                                px-2.5 py-1.5
+                                                text-[10px]
+                                                font-semibold
+                                                text-white/70
+                                                opacity-0
+                                                shadow-lg
+                                                backdrop-blur-sm
+                                                transition
+                                                group-hover/card:translate-y-0
+                                                group-hover/card:opacity-100
+                                                hover:border-white/35
+                                                hover:text-white
+                                                disabled:cursor-wait
+                                                disabled:opacity-50
+                                              "
+                                            >
+                                              {settingCommanderId ===
+                                              row.scryfall_id
+                                                ? "Definindo..."
+                                                : "Definir comandante"}
+                                            </button>
+                                          )}
+
+                                          {isOwner && row.board === "commander" && (
+                                            <span
+                                              className="
+                                                absolute bottom-2 right-2
+                                                rounded-lg
+                                                border border-white/15
+                                                bg-[#f4f1e8]
+                                                px-2.5 py-1.5
+                                                text-[10px]
+                                                font-semibold
+                                                text-black
+                                                shadow-lg
+                                              "
+                                            >
+                                              Comandante ✓
                                             </span>
                                           )}
                                         </div>
@@ -2478,6 +2709,31 @@ export default function DeckPage() {
                                   {getBoardLabel(row.board)}
                                 </p>
                               </div>
+
+                              {isOwner && row.board !== "commander" && (
+                                <button
+                                  type="button"
+                                  onClick={() => void setCardAsCommander(row)}
+                                  disabled={
+                                    settingCommanderId === row.scryfall_id
+                                  }
+                                  className="
+                                    shrink-0 rounded-lg
+                                    border border-white/10
+                                    px-3 py-2
+                                    text-xs text-white/45
+                                    transition
+                                    hover:border-white/25
+                                    hover:text-white
+                                    disabled:cursor-wait
+                                    disabled:opacity-40
+                                  "
+                                >
+                                  {settingCommanderId === row.scryfall_id
+                                    ? "Definindo..."
+                                    : "Definir comandante"}
+                                </button>
+                              )}
                             </div>
                           );
                         })}
@@ -2511,6 +2767,29 @@ export default function DeckPage() {
                                 {getBoardLabel(row.board)}
                               </p>
                             </div>
+
+                            {isOwner && row.board !== "commander" && (
+                              <button
+                                type="button"
+                                onClick={() => void setCardAsCommander(row)}
+                                disabled={
+                                  settingCommanderId === row.scryfall_id
+                                }
+                                className="
+                                  shrink-0 rounded-lg
+                                  border border-white/10
+                                  px-2.5 py-2
+                                  text-[10px] text-white/40
+                                  transition
+                                  hover:border-white/25
+                                  hover:text-white
+                                  disabled:cursor-wait
+                                  disabled:opacity-40
+                                "
+                              >
+                                CMD
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>
