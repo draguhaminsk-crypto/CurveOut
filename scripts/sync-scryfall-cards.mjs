@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { gunzipSync } from "node:zlib";
 
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -143,16 +144,16 @@ async function getOracleCardsDownloadUrl() {
     );
   }
 
-  if (!oracleBulk.download_uri) {
-    console.log(
-      "Objeto Oracle Cards recebido:",
-      JSON.stringify(oracleBulk, null, 2)
-    );
+  if (!oracleBulk.json_download_uri) {
+  console.log(
+    "Objeto Oracle Cards recebido:",
+    JSON.stringify(oracleBulk, null, 2)
+  );
 
-    throw new Error(
-      "Oracle Cards foi encontrado, mas não possui download_uri."
-    );
-  }
+  throw new Error(
+    "Oracle Cards foi encontrado, mas não possui json_download_uri."
+  );
+}
 
   console.log(
     `Oracle Cards encontrado: ${oracleBulk.name ?? "Oracle Cards"}`
@@ -162,7 +163,7 @@ async function getOracleCardsDownloadUrl() {
     `Última atualização: ${oracleBulk.updated_at ?? "desconhecida"}`
   );
 
-  return oracleBulk.download_uri;
+  return oracleBulk.json_download_uri;
 }
 
 async function upsertBatch(
@@ -221,13 +222,24 @@ async function main() {
     );
   }
 
-  const cards = await cardsResponse.json();
+ const compressedBuffer = Buffer.from(
+  await cardsResponse.arrayBuffer()
+);
 
-  if (!Array.isArray(cards)) {
-    throw new Error(
-      "O arquivo Oracle Cards não retornou uma lista."
-    );
-  }
+console.log(
+  `Arquivo baixado: ${(compressedBuffer.length / 1024 / 1024).toFixed(1)} MB compactados.`
+);
+
+const decompressedBuffer =
+  gunzipSync(compressedBuffer);
+
+const jsonLines =
+  decompressedBuffer.toString("utf8");
+
+const cards = jsonLines
+  .split("\n")
+  .filter((line) => line.trim())
+  .map((line) => JSON.parse(line));
 
   console.log(
     `${cards.length} cartas recebidas do Scryfall.`
