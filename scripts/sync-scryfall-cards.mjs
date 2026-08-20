@@ -40,10 +40,10 @@ function getImages(card) {
 console.log("Buscando informações do Bulk Data...");
 
 const bulkResponse = await fetch(
-  "https://api.scryfall.com/bulk-data",
+  "https://api.scryfall.com/bulk-data/oracle_cards",
   {
     headers: {
-      Accept: "application/json",
+      Accept: "application/json;q=0.9,*/*;q=0.8",
       "User-Agent": "CurveOut/0.1",
     },
   }
@@ -51,19 +51,15 @@ const bulkResponse = await fetch(
 
 if (!bulkResponse.ok) {
   throw new Error(
-    `Erro ao consultar Bulk Data: ${bulkResponse.status}`
+    `Erro ao consultar Oracle Cards: ${bulkResponse.status}`
   );
 }
 
-const bulkData = await bulkResponse.json();
-
-const oracleBulk = bulkData.data.find(
-  (item) => item.type === "oracle_cards"
-);
+const oracleBulk = await bulkResponse.json();
 
 if (!oracleBulk?.download_uri) {
   throw new Error(
-    "Arquivo oracle_cards não encontrado."
+    "download_uri do Oracle Cards não encontrado."
   );
 }
 
