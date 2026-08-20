@@ -372,3 +372,27 @@ return Response.json({
     );
   }
 }
+
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  const name = url.searchParams.get("name");
+
+  if (!name) {
+    return Response.json(
+      { error: "Informe o nome da carta." },
+      { status: 400 }
+    );
+  }
+
+  const fakePostRequest = new Request(request.url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      identifiers: [{ name }],
+    }),
+  });
+
+  return POST(fakePostRequest);
+}
