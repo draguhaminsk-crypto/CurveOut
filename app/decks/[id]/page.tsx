@@ -165,6 +165,52 @@ function parseImportList(value: string): ParsedImport {
   };
 }
 
+type ResolvedCard = {
+  id: string;
+  oracle_id?: string;
+  name: string;
+  requested_name?: string;
+  type_line?: string;
+  image_uris?: {
+    normal?: string;
+    large?: string;
+  };
+  card_faces?: {
+    image_uris?: {
+      normal?: string;
+      large?: string;
+    };
+  }[];
+};
+
+function getCardImage(card?: ResolvedCard) {
+  return (
+    card?.image_uris?.normal ??
+    card?.image_uris?.large ??
+    card?.card_faces?.[0]?.image_uris?.normal ??
+    card?.card_faces?.[0]?.image_uris?.large ??
+    null
+  );
+}
+
+function getProxiedCardImage(card?: ResolvedCard) {
+  const image = getCardImage(card);
+  if (!image) return null;
+
+  return `/api/scryfall/image?url=${encodeURIComponent(image)}`;
+}
+
+type DeckCardRow = {
+  id?: string;
+  deck_id: string;
+  scryfall_id: string;
+  oracle_id: string | null;
+  quantity: number;
+  board: ImportBoard;
+  created_at?: string;
+  card?: ResolvedCard;
+};
+
 type CurveOutSelectProps = {
   value: string;
   options: string[];
@@ -300,7 +346,15 @@ export default function DeckPage() {
   const [description, setDescription] = useState("");
 
   const [cardSearch, setCardSearch] = useState("");
+  const [cardSearchResults, setCardSearchResults] = useState<string[]>([]);
+  const [cardSearchOpen, setCardSearchOpen] = useState(false);
+  const [cardSearchLoading, setCardSearchLoading] = useState(false);
+  const [cardSearchError, setCardSearchError] = useState("");
+  const [cardSearchStatus, setCardSearchStatus] = useState("");
+  const [addingCard, setAddingCard] = useState(false);
+  const [highlightedCardIndex, setHighlightedCardIndex] = useState(0);
   const [deckSearch, setDeckSearch] = useState("");
+  const [deckCards, setDeckCards] = useState<DeckCardRow[]>([]);
   const [organizeBy, setOrganizeBy] = useState("Tipo");
   const [viewMode, setViewMode] = useState("Stack");
 
@@ -323,11 +377,147 @@ export default function DeckPage() {
     [importText]
   );
 
+  const deckCardTotal = useMemo(
+    () => deckCards.reduce((total, card) => total + card.quantity, 0),
+    [deckCards]
+  );
+
+  const visibleDeckCards = useMemo(() => {
+    const search = deckSearch.trim().toLocaleLowerCase("pt-BR");
+
+    if (!search) return deckCards;
+
+    return deckCards.filter((row) =>
+      (row.card?.name ?? row.scryfall_id)
+        .toLocaleLowerCase("pt-BR")
+        .includes(search)
+    );
+  }, [deckCards, deckSearch]);
+
+  async function loadDeckCards(deckId: string) {
+    const { data, error } = await supabase
+      .from("deck_cards")
+      .select(
+        "id, deck_id, scryfall_id, oracle_id, quantity, board, created_at"
+      )
+      .eq("deck_id", deckId)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("Erro ao carregar cartas do deck:", error);
+      return;
+    }
+
+    const rows = (data ?? []) as DeckCardRow[];
+    setDeckCards(rows);
+
+    if (rows.length === 0) return;
+
+    try {
+      const response = await fetch("/api/scryfall/cards", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          identifiers: rows.map((row) => ({
+            id: row.scryfall_id,
+          })),
+        }),
+      });
+
+      if (!response.ok) return;
+
+      const result = (await response.json()) as {
+        cards?: ResolvedCard[];
+      };
+
+      const cardsById = new Map(
+        (result.cards ?? []).map((card) => [card.id, card])
+      );
+
+      setDeckCards(
+        rows.map((row) => ({
+          ...row,
+          card: cardsById.get(row.scryfall_id),
+        }))
+      );
+    } catch (error) {
+      console.error("Não foi possível resolver os nomes das cartas:", error);
+    }
+  }
+
+  useEffect(() => {
+    const query = cardSearch.trim();
+
+    if (query.length < 2) {
+      setCardSearchResults([]);
+      setCardSearchOpen(false);
+      setCardSearchLoading(false);
+      setCardSearchError("");
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const timeout = window.setTimeout(async () => {
+      try {
+        setCardSearchLoading(true);
+        setCardSearchError("");
+
+        const response = await fetch(
+          `/api/scryfall/autocomplete?q=${encodeURIComponent(query)}`,
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
+
+        const result = (await response.json()) as {
+          data?: string[];
+          error?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(
+            result.error ?? "Não foi possível pesquisar as cartas."
+          );
+        }
+
+        const suggestions = (result.data ?? []).slice(0, 10);
+
+        setCardSearchResults(suggestions);
+        setHighlightedCardIndex(0);
+        setCardSearchOpen(suggestions.length > 0);
+      } catch (error) {
+        if (
+          error instanceof DOMException &&
+          error.name === "AbortError"
+        ) {
+          return;
+        }
+
+        console.error("Erro no autocomplete de cartas:", error);
+        setCardSearchResults([]);
+        setCardSearchOpen(false);
+        setCardSearchError("Não foi possível carregar sugestões.");
+      } finally {
+        if (!controller.signal.aborted) {
+          setCardSearchLoading(false);
+        }
+      }
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [cardSearch]);
+
   useEffect(() => {
     async function loadDeck() {
       setLoading(true);
       setErrorMessage("");
-
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -341,8 +531,19 @@ export default function DeckPage() {
         .maybeSingle();
 
       if (error) {
-        console.error("Erro ao carregar deck:", error);
-        setErrorMessage(error.message);
+       console.error(
+  "Erro ao carregar deck:",
+  "message =", error.message,
+  "code =", error.code,
+  "details =", error.details,
+  "hint =", error.hint
+);
+        setErrorMessage(
+  error.message ||
+  error.details ||
+  error.code ||
+  "Erro desconhecido ao carregar o deck."
+);
         setLoading(false);
         return;
       }
@@ -360,6 +561,8 @@ export default function DeckPage() {
       setDescription(data.description ?? "");
 
       setIsOwner(Boolean(user && user.id === data.owner_id));
+
+      await loadDeckCards(data.id);
 
       setLoading(false);
     }
@@ -448,6 +651,136 @@ export default function DeckPage() {
     };
   }, [priceOpen]);
 
+  async function addCardToDeck(cardName: string) {
+    const cleanName = cardName.trim();
+
+    if (!deck || !isOwner || !cleanName || addingCard) {
+      return;
+    }
+
+    setAddingCard(true);
+    setCardSearchError("");
+    setCardSearchStatus(`Adicionando ${cleanName}...`);
+
+    try {
+      const response = await fetch("/api/scryfall/cards", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          identifiers: [
+            {
+              name: cleanName,
+            },
+          ],
+        }),
+      });
+
+      const result = (await response.json()) as {
+        cards?: ResolvedCard[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          result.error ?? "Não foi possível consultar a carta."
+        );
+      }
+
+      const card = result.cards?.[0];
+
+      if (!card) {
+        throw new Error("Carta não encontrada.");
+      }
+
+      const { data: existingCard, error: existingError } = await supabase
+        .from("deck_cards")
+        .select("id, quantity")
+        .eq("deck_id", deck.id)
+        .eq("scryfall_id", card.id)
+        .eq("board", "mainboard")
+        .maybeSingle();
+
+      if (existingError) {
+        throw existingError;
+      }
+
+      if (existingCard) {
+        const { error: updateError } = await supabase
+          .from("deck_cards")
+          .update({
+            quantity: existingCard.quantity + 1,
+          })
+          .eq("id", existingCard.id);
+
+        if (updateError) {
+          throw updateError;
+        }
+      } else {
+        const { error: insertError } = await supabase
+          .from("deck_cards")
+          .insert({
+            deck_id: deck.id,
+            scryfall_id: card.id,
+            oracle_id: card.oracle_id ?? null,
+            quantity: 1,
+            board: "mainboard",
+          });
+
+        if (insertError) {
+          throw insertError;
+        }
+      }
+
+      const updatedAt = new Date().toISOString();
+
+      const { error: deckUpdateError } = await supabase
+        .from("decks")
+        .update({
+          updated_at: updatedAt,
+        })
+        .eq("id", deck.id)
+        .eq("owner_id", deck.owner_id);
+
+      if (deckUpdateError) {
+        console.error(
+          "Carta adicionada, mas não foi possível atualizar a data do deck:",
+          deckUpdateError
+        );
+      }
+
+      setDeck({
+        ...deck,
+        updated_at: updatedAt,
+      });
+
+      await loadDeckCards(deck.id);
+
+      setCardSearch("");
+      setCardSearchResults([]);
+      setCardSearchOpen(false);
+      setHighlightedCardIndex(0);
+      setCardSearchStatus(`${card.name} adicionada ✓`);
+
+      window.setTimeout(() => {
+        setCardSearchStatus("");
+      }, 1800);
+    } catch (error) {
+      console.error("Erro ao adicionar carta:", error);
+
+      setCardSearchError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível adicionar a carta."
+      );
+
+      setCardSearchStatus("");
+    } finally {
+      setAddingCard(false);
+    }
+  }
+
   function startEditing() {
     if (!deck) return;
 
@@ -518,6 +851,34 @@ export default function DeckPage() {
     setSaving(false);
   }
 
+  const clipboardDeckText = useMemo(() => {
+    if (deckCards.length === 0) return "";
+
+    const boardOrder: ImportBoard[] = [
+      "commander",
+      "mainboard",
+      "sideboard",
+      "maybeboard",
+    ];
+
+    return [...deckCards]
+      .sort((a, b) => {
+        const boardDifference =
+          boardOrder.indexOf(a.board) - boardOrder.indexOf(b.board);
+
+        if (boardDifference !== 0) return boardDifference;
+
+        return (a.card?.name ?? a.scryfall_id).localeCompare(
+          b.card?.name ?? b.scryfall_id
+        );
+      })
+      .map(
+        (row) =>
+          `${row.quantity} ${row.card?.name ?? row.scryfall_id}`
+      )
+      .join("\n");
+  }, [deckCards]);
+
   const exportText = useMemo(() => {
     if (!deck) return "";
 
@@ -531,25 +892,14 @@ export default function DeckPage() {
       lines.push("", `Notas: ${deck.description}`);
     }
 
-    lines.push(
-      "",
-      "Deck",
-      "",
-      "Nenhuma carta adicionada ainda."
-    );
+    if (clipboardDeckText) {
+      lines.push("", "Cartas", "", clipboardDeckText);
+    } else {
+      lines.push("", "Deck", "", "Nenhuma carta adicionada ainda.");
+    }
 
     return lines.join("\n");
-  }, [deck]);
-
-  const clipboardDeckText = useMemo(() => {
-    // Quando deck_cards estiver ligado, este texto será montado no formato:
-    // 1 Sol Ring
-    // 1 Arcane Signet
-    // 4 Forest
-    //
-    // Por enquanto o deck está sem cartas.
-    return "";
-  }, []);
+  }, [deck, clipboardDeckText]);
 
   async function copyExportText() {
     try {
@@ -736,7 +1086,7 @@ export default function DeckPage() {
 
                   <span>•</span>
 
-                  <span>0 cartas</span>
+                  <span>{deckCardTotal} cartas</span>
 
                   <span>•</span>
 
@@ -1188,7 +1538,56 @@ export default function DeckPage() {
                       id="card-search"
                       type="search"
                       value={cardSearch}
-                      onChange={(event) => setCardSearch(event.target.value)}
+                      autoComplete="off"
+                      onFocus={() => {
+                        if (cardSearchResults.length > 0) {
+                          setCardSearchOpen(true);
+                        }
+                      }}
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        setCardSearch(nextValue);
+                        setCardSearchError("");
+                        setCardSearchStatus("");
+
+                        if (nextValue.trim().length < 2) {
+                          setCardSearchResults([]);
+                          setCardSearchOpen(false);
+                          setHighlightedCardIndex(0);
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          setCardSearchOpen(false);
+                          return;
+                        }
+
+                        if (event.key === "ArrowDown" && cardSearchResults.length > 0) {
+                          event.preventDefault();
+                          setCardSearchOpen(true);
+                          setHighlightedCardIndex((current) =>
+                            Math.min(current + 1, cardSearchResults.length - 1)
+                          );
+                          return;
+                        }
+
+                        if (event.key === "ArrowUp" && cardSearchResults.length > 0) {
+                          event.preventDefault();
+                          setCardSearchOpen(true);
+                          setHighlightedCardIndex((current) =>
+                            Math.max(current - 1, 0)
+                          );
+                          return;
+                        }
+
+                        if (event.key === "Enter" && cardSearchOpen && cardSearchResults.length > 0) {
+                          event.preventDefault();
+                          const selected = cardSearchResults[highlightedCardIndex];
+                          if (selected) {
+                            void addCardToDeck(selected);
+                          }
+                        }
+                      }}
                       placeholder="Procurar carta..."
                       className="
                         w-full rounded-xl
@@ -1202,9 +1601,53 @@ export default function DeckPage() {
                       "
                     />
 
-                    <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/25">
-                      ⌕
+                    <span className="pointer-events-none absolute right-4 top-[23px] -translate-y-1/2 text-white/25">
+                      {cardSearchLoading || addingCard ? "…" : "⌕"}
                     </span>
+
+                    {cardSearchOpen && cardSearchResults.length > 0 && (
+                      <div
+                        className="
+                          absolute left-0 right-0 top-full z-50 mt-2
+                          max-h-80 overflow-y-auto rounded-xl
+                          border border-white/10 bg-[#111114]/95
+                          p-1.5 shadow-2xl backdrop-blur-xl
+                        "
+                      >
+                        {cardSearchResults.map((suggestion, index) => (
+                          <button
+                            key={suggestion}
+                            type="button"
+                            onMouseEnter={() => setHighlightedCardIndex(index)}
+                            onClick={() => {
+                              void addCardToDeck(suggestion);
+                            }}
+                            className={`
+                              block w-full rounded-lg px-3 py-2.5 text-left text-sm transition
+                              ${
+                                highlightedCardIndex === index
+                                  ? "bg-white/[0.09] text-white"
+                                  : "text-white/60 hover:bg-white/[0.06] hover:text-white"
+                              }
+                            `}
+                          >
+                            {suggestion}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {cardSearchError && (
+                      <p className="mt-2 px-1 text-[11px] text-red-300/70">
+                        {cardSearchError}
+                      </p>
+                    )}
+
+                    {cardSearchStatus && (
+                      <p className="mt-2 px-1 text-[11px] text-emerald-300/70">
+                        {cardSearchStatus}
+                      </p>
+                    )}
                   </div>
                 </div>
                 )}
@@ -1284,38 +1727,93 @@ export default function DeckPage() {
               </div>
 
               {/* ÁREA DAS CARTAS */}
-              <div className="min-h-[420px] px-5 py-10 md:px-6 lg:px-8">
-                <div className="max-w-xl">
-                  <p className="text-lg text-white/55">
-                    {isOwner
-                      ? "Seu deck está vazio."
-                      : "Este deck está vazio."}
-                  </p>
+              <div className="min-h-[420px] px-5 py-8 md:px-6 lg:px-8">
+                {deckCards.length === 0 ? (
+                  <div className="max-w-xl py-2">
+                    <p className="text-lg text-white/55">
+                      {isOwner
+                        ? "Seu deck está vazio."
+                        : "Este deck está vazio."}
+                    </p>
 
-                  <p className="mt-2 text-sm leading-6 text-white/30">
-                    {isOwner
-                      ? "Adicione cartas para começar a montar o deck."
-                      : "O autor ainda não adicionou cartas a este deck."}
-                  </p>
+                    <p className="mt-2 text-sm leading-6 text-white/30">
+                      {isOwner
+                        ? "Adicione cartas para começar a montar o deck."
+                        : "O autor ainda não adicionou cartas a este deck."}
+                    </p>
 
-                  {isOwner && (
-                    <button
-                      type="button"
-                      className="
-                        mt-6
-                        rounded-lg
-                        bg-[#f4f1e8]
-                        px-6 py-2.5
-                        text-sm font-semibold
-                        text-black
-                        transition
-                        hover:bg-white
-                      "
-                    >
-                      Adicionar cartas
-                    </button>
-                  )}
-                </div>
+                    {isOwner && (
+                      <button
+                        type="button"
+                        onClick={() => setImportDeckOpen(true)}
+                        className="
+                          mt-6 rounded-lg bg-[#f4f1e8]
+                          px-6 py-2.5 text-sm font-semibold
+                          text-black transition hover:bg-white
+                        "
+                      >
+                        Importar cartas
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <div className="mb-5 flex items-end justify-between gap-4">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.18em] text-white/25">
+                          Lista do deck
+                        </p>
+                        <p className="mt-1 text-sm text-white/40">
+                          {visibleDeckCards.length} entrada(s) · {deckCardTotal} cartas
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
+                      {visibleDeckCards.map((row) => {
+                        const image = getProxiedCardImage(row.card);
+
+                        return (
+                          <div
+                            key={`${row.scryfall_id}-${row.board}`}
+                            className="group relative"
+                          >
+                            <div className="relative overflow-hidden rounded-xl">
+                              {image ? (
+                                <img
+                                  src={image}
+                                  alt={row.card?.name ?? "Carta"}
+                                  className="block w-full rounded-xl transition duration-200 group-hover:-translate-y-1"
+                                />
+                              ) : (
+                                <div className="flex aspect-[63/88] items-center justify-center rounded-xl border border-white/10 bg-white/[0.025] px-4 text-center text-xs text-white/30">
+                                  {row.card?.name ?? "Imagem indisponível"}
+                                </div>
+                              )}
+
+                              {row.quantity > 1 && (
+                                <span className="absolute left-2 top-2 rounded-md bg-black/80 px-2 py-1 text-xs font-semibold text-white backdrop-blur">
+                                  {row.quantity}x
+                                </span>
+                              )}
+                            </div>
+
+                            <p className="mt-2 truncate text-sm text-white/65">
+                              {row.card?.name ??
+                                `Carta ${row.scryfall_id.slice(0, 8)}…`}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {visibleDeckCards.length === 0 && (
+                      <p className="py-12 text-sm text-white/30">
+                        Nenhuma carta encontrada para essa busca.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </section>
@@ -1331,11 +1829,11 @@ export default function DeckPage() {
             px-4 py-6
             backdrop-blur-sm
           "
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setShareDeckOpen(false);
-            }
-          }}
+         onMouseDown={(event) => {
+  if (event.target === event.currentTarget) {
+    setShareDeckOpen(false);
+  }
+}}
         >
           <div
             className="
@@ -1549,7 +2047,7 @@ export default function DeckPage() {
                   </div>
 
                   <span className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-white/30">
-                    0 cartas
+                    {deckCardTotal} cartas
                   </span>
                 </div>
 
