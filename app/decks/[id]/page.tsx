@@ -327,6 +327,10 @@ function CurveOutSelect({
   );
 }
 
+const API_BASE =
+  process.env.NODE_ENV === "development"
+    ? "https://curveout.com.br"
+    : "";
 export default function DeckPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -414,7 +418,7 @@ export default function DeckPage() {
     if (rows.length === 0) return;
 
     try {
-      const response = await fetch("/api/scryfall/cards", {
+      const response = await fetch(`${API_BASE}/api/scryfall/cards`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
