@@ -327,10 +327,6 @@ function CurveOutSelect({
   );
 }
 
-const API_BASE =
-  process.env.NODE_ENV === "development"
-    ? "https://curveout.com.br"
-    : "";
 export default function DeckPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -398,58 +394,73 @@ export default function DeckPage() {
     );
   }, [deckCards, deckSearch]);
 
-  async function loadDeckCards(deckId: string) {
-    const { data, error } = await supabase
-      .from("deck_cards")
-      .select(
-        "id, deck_id, scryfall_id, oracle_id, quantity, board, created_at"
-      )
-      .eq("deck_id", deckId)
-      .order("created_at", { ascending: true });
+ async function loadDeckCards(deckId: string) {
+  const { data, error } = await supabase
+    .from("deck_cards")
+    .select(
+      "id, deck_id, scryfall_id, oracle_id, quantity, board, created_at"
+    )
+    .eq("deck_id", deckId)
+    .order("created_at", { ascending: true });
 
-    if (error) {
-      console.error("Erro ao carregar cartas do deck:", error);
-      return;
-    }
-
-    const rows = (data ?? []) as DeckCardRow[];
-    setDeckCards(rows);
-
-    if (rows.length === 0) return;
-
-    try {
-      const response = await fetch(`${API_BASE}/api/scryfall/cards`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          identifiers: rows.map((row) => ({
-            id: row.scryfall_id,
-          })),
-        }),
-      });
-
-      if (!response.ok) return;
-
-      const result = (await response.json()) as {
-        cards?: ResolvedCard[];
-      };
-
-      const cardsById = new Map(
-        (result.cards ?? []).map((card) => [card.id, card])
-      );
-
-      setDeckCards(
-        rows.map((row) => ({
-          ...row,
-          card: cardsById.get(row.scryfall_id),
-        }))
-      );
-    } catch (error) {
-      console.error("Não foi possível resolver os nomes das cartas:", error);
-    }
+  if (error) {
+    console.error("Erro ao carregar cartas do deck:", error);
+    return;
   }
+
+  const rows = (data ?? []) as DeckCardRow[];
+
+  if (rows.length === 0) {
+    setDeckCards([]);
+    return;
+  }
+
+  const scryfallIds = Array.from(
+    new Set(rows.map((row) => row.scryfall_id))
+  );
+
+  const { data: cardData, error: cardsError } = await supabase
+    .from("cards")
+    .select(
+      "scryfall_id, oracle_id, name, type_line, image_uri, image_uri_large"
+    )
+    .in("scryfall_id", scryfallIds);
+
+  if (cardsError) {
+    console.error(
+      "Erro ao carregar dados das cartas:",
+      cardsError
+    );
+
+    setDeckCards(rows);
+    return;
+  }
+
+  const cardsById = new Map<string, ResolvedCard>();
+
+  for (const card of cardData ?? []) {
+    cardsById.set(card.scryfall_id, {
+      id: card.scryfall_id,
+      oracle_id: card.oracle_id ?? undefined,
+      name: card.name,
+      type_line: card.type_line ?? undefined,
+      image_uris:
+        card.image_uri || card.image_uri_large
+          ? {
+              normal: card.image_uri ?? undefined,
+              large: card.image_uri_large ?? undefined,
+            }
+          : undefined,
+    });
+  }
+
+  setDeckCards(
+    rows.map((row) => ({
+      ...row,
+      card: cardsById.get(row.scryfall_id),
+    }))
+  );
+}
 
   useEffect(() => {
     const query = cardSearch.trim();
