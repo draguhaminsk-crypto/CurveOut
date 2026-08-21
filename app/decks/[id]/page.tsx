@@ -211,6 +211,47 @@ type DeckCardRow = {
   card?: ResolvedCard;
 };
 
+type CardTypeGroup =
+  | "Comandante"
+  | "Artefatos"
+  | "Criaturas"
+  | "Encantamentos"
+  | "Planeswalkers"
+  | "Instantâneas"
+  | "Terrenos"
+  | "Feitiços"
+  | "Outros";
+
+const cardTypeGroupOrder: CardTypeGroup[] = [
+  "Comandante",
+  "Artefatos",
+  "Criaturas",
+  "Encantamentos",
+  "Planeswalkers",
+  "Instantâneas",
+  "Terrenos",
+  "Feitiços",
+  "Outros",
+];
+
+function getCardTypeGroup(row: DeckCardRow): CardTypeGroup {
+  if (row.board === "commander") {
+    return "Comandante";
+  }
+
+  const typeLine = row.card?.type_line?.toLowerCase() ?? "";
+
+  if (typeLine.includes("land")) return "Terrenos";
+  if (typeLine.includes("creature")) return "Criaturas";
+  if (typeLine.includes("artifact")) return "Artefatos";
+  if (typeLine.includes("enchantment")) return "Encantamentos";
+  if (typeLine.includes("planeswalker")) return "Planeswalkers";
+  if (typeLine.includes("instant")) return "Instantâneas";
+  if (typeLine.includes("sorcery")) return "Feitiços";
+
+  return "Outros";
+}
+
 type CurveOutSelectProps = {
   value: string;
   options: string[];
@@ -394,73 +435,89 @@ export default function DeckPage() {
     );
   }, [deckCards, deckSearch]);
 
- async function loadDeckCards(deckId: string) {
-  const { data, error } = await supabase
-    .from("deck_cards")
-    .select(
-      "id, deck_id, scryfall_id, oracle_id, quantity, board, created_at"
-    )
-    .eq("deck_id", deckId)
-    .order("created_at", { ascending: true });
+  const deckCardsByType = useMemo(() => {
+    return cardTypeGroupOrder
+      .map((groupName) => {
+        const cards = visibleDeckCards.filter(
+          (row) => getCardTypeGroup(row) === groupName
+        );
 
-  if (error) {
-    console.error("Erro ao carregar cartas do deck:", error);
-    return;
-  }
+        return {
+          name: groupName,
+          cards,
+          quantity: cards.reduce(
+            (total, row) => total + row.quantity,
+            0
+          ),
+        };
+      })
+      .filter((group) => group.cards.length > 0);
+  }, [visibleDeckCards]);
 
-  const rows = (data ?? []) as DeckCardRow[];
 
-  if (rows.length === 0) {
-    setDeckCards([]);
-    return;
-  }
+  async function loadDeckCards(deckId: string) {
+    const { data, error } = await supabase
+      .from("deck_cards")
+      .select(
+        "id, deck_id, scryfall_id, oracle_id, quantity, board, created_at"
+      )
+      .eq("deck_id", deckId)
+      .order("created_at", { ascending: true });
 
-  const scryfallIds = Array.from(
-    new Set(rows.map((row) => row.scryfall_id))
-  );
+    if (error) {
+      console.error("Erro ao carregar cartas do deck:", error);
+      return;
+    }
 
-  const { data: cardData, error: cardsError } = await supabase
-    .from("cards")
-    .select(
-      "scryfall_id, oracle_id, name, type_line, image_uri, image_uri_large"
-    )
-    .in("scryfall_id", scryfallIds);
+    const rows = (data ?? []) as DeckCardRow[];
 
-  if (cardsError) {
-    console.error(
-      "Erro ao carregar dados das cartas:",
-      cardsError
+    if (rows.length === 0) {
+      setDeckCards([]);
+      return;
+    }
+
+    const scryfallIds = Array.from(
+      new Set(rows.map((row) => row.scryfall_id))
     );
 
-    setDeckCards(rows);
-    return;
+    const { data: cardData, error: cardsError } = await supabase
+      .from("cards")
+      .select(
+        "scryfall_id, oracle_id, name, type_line, image_uri, image_uri_large"
+      )
+      .in("scryfall_id", scryfallIds);
+
+    if (cardsError) {
+      console.error("Erro ao carregar dados das cartas:", cardsError);
+      setDeckCards(rows);
+      return;
+    }
+
+    const cardsById = new Map<string, ResolvedCard>();
+
+    for (const card of cardData ?? []) {
+      cardsById.set(card.scryfall_id, {
+        id: card.scryfall_id,
+        oracle_id: card.oracle_id ?? undefined,
+        name: card.name,
+        type_line: card.type_line ?? undefined,
+        image_uris:
+          card.image_uri || card.image_uri_large
+            ? {
+                normal: card.image_uri ?? undefined,
+                large: card.image_uri_large ?? undefined,
+              }
+            : undefined,
+      });
+    }
+
+    setDeckCards(
+      rows.map((row) => ({
+        ...row,
+        card: cardsById.get(row.scryfall_id),
+      }))
+    );
   }
-
-  const cardsById = new Map<string, ResolvedCard>();
-
-  for (const card of cardData ?? []) {
-    cardsById.set(card.scryfall_id, {
-      id: card.scryfall_id,
-      oracle_id: card.oracle_id ?? undefined,
-      name: card.name,
-      type_line: card.type_line ?? undefined,
-      image_uris:
-        card.image_uri || card.image_uri_large
-          ? {
-              normal: card.image_uri ?? undefined,
-              large: card.image_uri_large ?? undefined,
-            }
-          : undefined,
-    });
-  }
-
-  setDeckCards(
-    rows.map((row) => ({
-      ...row,
-      card: cardsById.get(row.scryfall_id),
-    }))
-  );
-}
 
   useEffect(() => {
     const query = cardSearch.trim();
@@ -1778,48 +1835,97 @@ export default function DeckPage() {
                         <p className="text-xs uppercase tracking-[0.18em] text-white/25">
                           Lista do deck
                         </p>
+
                         <p className="mt-1 text-sm text-white/40">
                           {visibleDeckCards.length} entrada(s) · {deckCardTotal} cartas
                         </p>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
-                      {visibleDeckCards.map((row) => {
-                        const image = getProxiedCardImage(row.card);
-
-                        return (
-                          <div
-                            key={`${row.scryfall_id}-${row.board}`}
-                            className="group relative"
+                    <div className="overflow-x-auto pb-6">
+                      <div className="flex w-max min-w-full items-start justify-center gap-6 px-6 pt-4">
+                        {deckCardsByType.map((group) => (
+                          <section
+                            key={group.name}
+                            className="w-[220px] shrink-0"
                           >
-                            <div className="relative overflow-hidden rounded-xl">
-                              {image ? (
-                                <img
-                                  src={image}
-                                  alt={row.card?.name ?? "Carta"}
-                                  className="block w-full rounded-xl transition duration-200 group-hover:-translate-y-1"
-                                />
-                              ) : (
-                                <div className="flex aspect-[63/88] items-center justify-center rounded-xl border border-white/10 bg-white/[0.025] px-4 text-center text-xs text-white/30">
-                                  {row.card?.name ?? "Imagem indisponível"}
-                                </div>
-                              )}
+                            <div className="mb-3 border-b border-white/10 pb-2">
+                              <div className="flex items-center justify-between gap-3">
+                                <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-white/60">
+                                  {group.name}
+                                </h3>
 
-                              {row.quantity > 1 && (
-                                <span className="absolute left-2 top-2 rounded-md bg-black/80 px-2 py-1 text-xs font-semibold text-white backdrop-blur">
-                                  {row.quantity}x
+                                <span className="text-xs text-white/30">
+                                  {group.quantity}
                                 </span>
-                              )}
+                              </div>
                             </div>
 
-                            <p className="mt-2 truncate text-sm text-white/65">
-                              {row.card?.name ??
-                                `Carta ${row.scryfall_id.slice(0, 8)}…`}
-                            </p>
-                          </div>
-                        );
-                      })}
+                            <div className="relative min-h-[460px]">
+                              {group.cards.map((row, index) => {
+                                const image = getProxiedCardImage(row.card);
+
+                                return (
+                                  <div
+                                    key={`${row.scryfall_id}-${row.board}`}
+                                    className="
+                                      group/card
+                                      relative
+                                      mx-auto
+                                      w-[195px]
+                                      transition
+                                      duration-200
+                                      hover:z-40
+                                    "
+                                    style={{
+                                      marginTop: index === 0 ? 0 : -185,
+                                    }}
+                                  >
+                                    <div
+                                      className="
+                                        relative
+                                        overflow-hidden
+                                        rounded-[9px]
+                                        border border-white/10
+                                        bg-[#151518]
+                                        shadow-lg shadow-black/30
+                                        transition
+                                        duration-200
+                                        group-hover/card:-translate-y-3
+                                        group-hover/card:scale-[1.03]
+                                        group-hover/card:border-white/30
+                                      "
+                                    >
+                                      {image ? (
+                                        <img
+                                          src={image}
+                                          alt={row.card?.name ?? "Carta"}
+                                          className="block aspect-[63/88] w-full object-cover"
+                                        />
+                                      ) : (
+                                        <div className="flex aspect-[63/88] flex-col justify-start bg-[#17171a]">
+                                          <div className="border-b border-white/10 px-3 py-2">
+                                            <p className="truncate text-xs font-medium text-white/75">
+                                              {row.card?.name ??
+                                                `Carta ${row.scryfall_id.slice(0, 8)}…`}
+                                            </p>
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {row.quantity > 1 && (
+                                        <span className="absolute left-2 top-2 rounded bg-black/85 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                                          {row.quantity}x
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </section>
+                        ))}
+                      </div>
                     </div>
 
                     {visibleDeckCards.length === 0 && (
@@ -1860,7 +1966,7 @@ export default function DeckPage() {
               shadow-2xl
             "
           >
-            <div className="flex items-start justify-between gap-6 border-b border-white/10 px-6 py-5">
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-white/30">
                   Compartilhar

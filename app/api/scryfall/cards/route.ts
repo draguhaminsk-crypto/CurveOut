@@ -42,18 +42,6 @@ const scryfallHeaders = {
   "User-Agent": "CurveOut/0.1",
 };
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "http://localhost:3000",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
-export async function OPTIONS() {
-  return new Response(null, {
-    status: 204,
-    headers: corsHeaders,
-  });
-}
 
 function getString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -245,15 +233,10 @@ export async function POST(request: Request) {
       : [];
 
     if (identifiers.length === 0) {
-      return Response.json(
-        {
-          cards: [],
-          notFound: [],
-        },
-        {
-          headers: corsHeaders,
-        }
-      );
+      return Response.json({
+        cards: [],
+        notFound: [],
+      });
     }
 
     const { cachedCards, missingIdentifiers } =
@@ -337,15 +320,10 @@ export async function POST(request: Request) {
 
     await cacheCards(cards);
 
-    return Response.json(
-      {
-        cards: [...cachedCards, ...cards],
-        notFound: stillNotFound,
-      },
-      {
-        headers: corsHeaders,
-      }
-    );
+    return Response.json({
+      cards: [...cachedCards, ...cards],
+      notFound: stillNotFound,
+    });
   } catch (error) {
     console.error("Erro em /api/scryfall/cards:", error);
 
@@ -357,7 +335,6 @@ export async function POST(request: Request) {
       },
       {
         status: 500,
-        headers: corsHeaders,
       }
     );
   }
@@ -374,7 +351,6 @@ export async function GET(request: Request) {
       },
       {
         status: 400,
-        headers: corsHeaders,
       }
     );
   }
