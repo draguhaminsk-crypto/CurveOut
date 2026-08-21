@@ -396,6 +396,23 @@ export default function DeckPage() {
   const [highlightedCardIndex, setHighlightedCardIndex] = useState(0);
   const [deckSearch, setDeckSearch] = useState("");
   const [deckCards, setDeckCards] = useState<DeckCardRow[]>([]);
+  const [selectedCard, setSelectedCard] =
+    useState<DeckCardRow | null>(null);
+    useEffect(() => {
+  if (!selectedCard) return;
+
+  function handleEscape(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      setSelectedCard(null);
+    }
+  }
+
+  window.addEventListener("keydown", handleEscape);
+
+  return () => {
+    window.removeEventListener("keydown", handleEscape);
+  };
+}, [selectedCard]);
   const [organizeBy, setOrganizeBy] = useState("Tipo");
   const [viewMode, setViewMode] = useState("Stack");
 
@@ -722,6 +739,80 @@ export default function DeckPage() {
       document.removeEventListener("keydown", handleEscape);
     };
   }, [priceOpen]);
+
+  async function increaseCardQuantity(row: DeckCardRow) {
+    if (!deck || !isOwner || !row.id) return;
+
+    const { error } = await supabase
+      .from("deck_cards")
+      .update({
+        quantity: row.quantity + 1,
+      })
+      .eq("id", row.id);
+
+    if (error) {
+      console.error("Erro ao aumentar quantidade:", error);
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+
+    await supabase
+      .from("decks")
+      .update({ updated_at: updatedAt })
+      .eq("id", deck.id)
+      .eq("owner_id", deck.owner_id);
+
+    setDeck({
+      ...deck,
+      updated_at: updatedAt,
+    });
+
+    await loadDeckCards(deck.id);
+  }
+
+  async function decreaseCardQuantity(row: DeckCardRow) {
+    if (!deck || !isOwner || !row.id) return;
+
+    if (row.quantity <= 1) {
+      const { error } = await supabase
+        .from("deck_cards")
+        .delete()
+        .eq("id", row.id);
+
+      if (error) {
+        console.error("Erro ao remover carta:", error);
+        return;
+      }
+    } else {
+      const { error } = await supabase
+        .from("deck_cards")
+        .update({
+          quantity: row.quantity - 1,
+        })
+        .eq("id", row.id);
+
+      if (error) {
+        console.error("Erro ao diminuir quantidade:", error);
+        return;
+      }
+    }
+
+    const updatedAt = new Date().toISOString();
+
+    await supabase
+      .from("decks")
+      .update({ updated_at: updatedAt })
+      .eq("id", deck.id)
+      .eq("owner_id", deck.owner_id);
+
+    setDeck({
+      ...deck,
+      updated_at: updatedAt,
+    });
+
+    await loadDeckCards(deck.id);
+  }
 
   async function addCardToDeck(cardName: string) {
     const cleanName = cardName.trim();
@@ -1842,12 +1933,15 @@ export default function DeckPage() {
                       </div>
                     </div>
 
-                    <div className="overflow-x-auto pb-6">
-                      <div className="flex w-max min-w-full items-start justify-center gap-6 px-6 pt-4">
+                    <div
+  className="overflow-x-auto pb-6"
+  style={{ zoom: 0.92 }}
+>
+                      <div className="flex min-w-max items-start justify-start gap-3 pl-0 pr-2 pt-4">
                         {deckCardsByType.map((group) => (
                           <section
                             key={group.name}
-                            className="w-[220px] shrink-0"
+                            className="w-[255px] shrink-0"
                           >
                             <div className="mb-3 border-b border-white/10 pb-2">
                               <div className="flex items-center justify-between gap-3">
@@ -1868,17 +1962,20 @@ export default function DeckPage() {
                                 return (
                                   <div
                                     key={`${row.scryfall_id}-${row.board}`}
+                                    onClick={() => setSelectedCard(row)}
                                     className="
                                       group/card
                                       relative
                                       mx-auto
-                                      w-[195px]
-                                      transition
+                                      w-[248px]
+                                      transition-all
                                       duration-200
+                                      ease-out
                                       hover:z-40
+                                      hover:mb-[185px]
                                     "
                                     style={{
-                                      marginTop: index === 0 ? 0 : -185,
+                                      marginTop: index === 0 ? 0 : -270,
                                     }}
                                   >
                                     <div
@@ -1891,8 +1988,7 @@ export default function DeckPage() {
                                         shadow-lg shadow-black/30
                                         transition
                                         duration-200
-                                        group-hover/card:-translate-y-3
-                                        group-hover/card:scale-[1.03]
+                                        group-hover/card:-translate-y-1
                                         group-hover/card:border-white/30
                                       "
                                     >
@@ -1913,11 +2009,114 @@ export default function DeckPage() {
                                         </div>
                                       )}
 
-                                      {row.quantity > 1 && (
-                                        <span className="absolute left-2 top-2 rounded bg-black/85 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                                          {row.quantity}x
-                                        </span>
-                                      )}
+                                      {/* QUANTIDADE NORMAL */}
+                                      <span
+                                        className="
+                                          absolute right-1 top-1
+                                          rounded-md
+                                          bg-black/80
+                                          px-1.5 py-0.5
+                                          text-[10px] font-semibold text-white/85
+                                          transition
+                                          group-hover/card:opacity-0
+                                        "
+                                      >
+                                        {row.quantity}
+                                      </span>
+
+                                      {/* CONTROLES NO HOVER */}
+                                      <div
+                                        className="
+                                          absolute bottom-1.5 left-1/2
+                                          flex -translate-x-1/2 items-center gap-1.5
+                                          opacity-0
+                                          transition
+                                          group-hover/card:opacity-100
+                                        "
+                                      >
+                                        {isOwner && (
+                                          <div
+                                            className="
+                                              flex items-center gap-2
+                                              rounded-lg
+                                              border border-white/10
+                                              bg-black/90
+                                              px-2 py-1
+                                              shadow-lg shadow-black/40
+                                              backdrop-blur-sm
+                                            "
+                                          >
+                                            <button
+                                              type="button"
+                                              aria-label={`Aumentar quantidade de ${
+                                                row.card?.name ?? "carta"
+                                              }`}
+                                              onClick={(event) => {
+                                                event.stopPropagation();
+                                                void increaseCardQuantity(row);
+                                              }}
+                                              className="
+                                                flex h-6 w-6 items-center justify-center
+                                                rounded-md
+                                                text-sm font-semibold text-white/75
+                                                transition
+                                                hover:bg-white/10
+                                                hover:text-white
+                                              "
+                                            >
+                                              +
+                                            </button>
+
+                                            <span className="min-w-5 text-center text-xs font-semibold text-white">
+                                              {row.quantity}
+                                            </span>
+
+                                            <button
+                                              type="button"
+                                              aria-label={`Diminuir quantidade de ${
+                                                row.card?.name ?? "carta"
+                                              }`}
+                                              onClick={(event) => {
+                                                event.stopPropagation();
+                                                void decreaseCardQuantity(row);
+                                              }}
+                                              className="
+                                                flex h-6 w-6 items-center justify-center
+                                                rounded-md
+                                                text-sm font-semibold text-white/75
+                                                transition
+                                                hover:bg-white/10
+                                                hover:text-white
+                                              "
+                                            >
+                                              −
+                                            </button>
+                                          </div>
+                                        )}
+
+                                        <button
+                                          type="button"
+                                          aria-label="Mais opções da carta"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            setSelectedCard(row);
+                                          }}
+                                          className="
+                                            flex h-8 w-8 items-center justify-center
+                                            rounded-lg
+                                            border border-white/10
+                                            bg-black/90
+                                            text-lg leading-none text-white/65
+                                            shadow-lg shadow-black/40
+                                            backdrop-blur-sm
+                                            transition
+                                            hover:bg-[#202024]
+                                            hover:text-white
+                                          "
+                                        >
+                                          ⋯
+                                        </button>
+                                      </div>
                                     </div>
                                   </div>
                                 );
@@ -1940,6 +2139,81 @@ export default function DeckPage() {
           </section>
         )}
       </div>
+
+      {selectedCard && (
+        <div
+          className="
+            fixed inset-0 z-[100]
+            flex items-center justify-center
+            bg-black/75
+            px-4
+            backdrop-blur-sm
+          "
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setSelectedCard(null);
+            }
+          }}
+        >
+          <div
+            className="
+              w-full max-w-md
+              rounded-2xl
+              border border-white/15
+              bg-[#111114]
+              p-6
+              shadow-2xl
+            "
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-white/30">
+                  Carta
+                </p>
+
+                <h2 className="mt-2 text-xl font-semibold text-white">
+                  {selectedCard.card?.name ?? "Carta"}
+                </h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedCard(null)}
+                className="
+                  flex h-8 w-8 items-center justify-center
+                  rounded-lg
+                  border border-white/10
+                  text-white/45
+                  transition
+                  hover:bg-white/5
+                  hover:text-white
+                "
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              className="
+                mt-6
+                rounded-xl
+                border border-dashed border-white/15
+                bg-white/[0.025]
+                px-5 py-10
+                text-center
+              "
+            >
+              <p className="text-sm text-white/55">
+                Funcionou 🎉
+              </p>
+
+              <p className="mt-2 text-xs text-white/25">
+                Aqui entrarão impressão, edição, idioma e outras opções da carta.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {shareDeckOpen && (
         <div
@@ -1966,7 +2240,7 @@ export default function DeckPage() {
               shadow-2xl
             "
           >
-            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
+            <div className="flex items-start justify-between gap-6 border-b border-white/10 px-6 py-5">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-white/30">
                   Compartilhar
