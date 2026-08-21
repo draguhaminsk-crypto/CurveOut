@@ -42,6 +42,19 @@ const scryfallHeaders = {
   "User-Agent": "CurveOut/0.1",
 };
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "http://localhost:3000",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
+}
+
 function getString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
@@ -54,17 +67,25 @@ function getStringArray(value: unknown): string[] | undefined {
 function cardRowToScryfallCard(row: CardRow): ScryfallCard {
   const rawCardData = row.card_data;
 
-  if (rawCardData && typeof rawCardData === "object" && !Array.isArray(rawCardData)) {
+  if (
+    rawCardData &&
+    typeof rawCardData === "object" &&
+    !Array.isArray(rawCardData)
+  ) {
     const cardData = rawCardData as Partial<ScryfallCard>;
-    if (typeof cardData.id === "string" && typeof cardData.name === "string") {
+
+    if (
+      typeof cardData.id === "string" &&
+      typeof cardData.name === "string"
+    ) {
       return cardData as ScryfallCard;
     }
   }
 
   const id = getString(row.scryfall_id) ?? getString(row.id) ?? "";
   const name = getString(row.name) ?? `Carta ${id.slice(0, 8)}`;
-
-  const normalImage = getString(row.image_uri) ?? getString(row.image_uri_normal);
+  const normalImage =
+    getString(row.image_uri) ?? getString(row.image_uri_normal);
   const largeImage = getString(row.image_uri_large);
 
   return {
@@ -128,9 +149,13 @@ async function cacheCards(cards: ScryfallCard[]) {
 
     const { error } = await admin
       .from("cards")
-      .upsert(cardsToCache, { onConflict: "scryfall_id" });
+      .upsert(cardsToCache, {
+        onConflict: "scryfall_id",
+      });
 
-    if (error) console.error("Erro ao salvar cache:", error);
+    if (error) {
+      console.error("Erro ao salvar cache:", error);
+    }
   } catch (error) {
     console.error("Erro no cache do CurveOut:", error);
   }
@@ -184,13 +209,19 @@ async function getCardsFromCache(identifiers: CardIdentifier[]) {
   const missingIdentifiers = identifiers.filter(
     (identifier) =>
       !uniqueCards.some((card) => {
-        if (identifier.id) return card.id === identifier.id;
+        if (identifier.id) {
+          return card.id === identifier.id;
+        }
+
         if (!identifier.name) return false;
 
-        const sameName = card.name.toLowerCase() === identifier.name.toLowerCase();
+        const sameName =
+          card.name.toLowerCase() === identifier.name.toLowerCase();
+
         const sameSet =
           !identifier.set ||
           card.set?.toLowerCase() === identifier.set.toLowerCase();
+
         const sameCollector =
           !identifier.collector_number ||
           card.collector_number === identifier.collector_number;
@@ -199,18 +230,30 @@ async function getCardsFromCache(identifiers: CardIdentifier[]) {
       })
   );
 
-  return { cachedCards: uniqueCards, missingIdentifiers };
+  return {
+    cachedCards: uniqueCards,
+    missingIdentifiers,
+  };
 }
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
+
     const identifiers: CardIdentifier[] = Array.isArray(body.identifiers)
       ? body.identifiers
       : [];
 
     if (identifiers.length === 0) {
-      return Response.json({ cards: [], notFound: [] });
+      return Response.json(
+        {
+          cards: [],
+          notFound: [],
+        },
+        {
+          headers: corsHeaders,
+        }
+      );
     }
 
     const { cachedCards, missingIdentifiers } =
@@ -231,7 +274,9 @@ export async function POST(request: Request) {
               ...scryfallHeaders,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ identifiers: chunk }),
+            body: JSON.stringify({
+              identifiers: chunk,
+            }),
           }
         );
 
@@ -244,10 +289,14 @@ export async function POST(request: Request) {
         }
 
         const result: ScryfallCollectionResponse = await response.json();
+
         cards.push(...(result.data ?? []));
         notFound.push(...(result.not_found ?? []));
       } catch (error) {
-        console.warn("Não foi possível consultar a coleção no Scryfall:", error);
+        console.warn(
+          "Não foi possível consultar a coleção no Scryfall:",
+          error
+        );
         notFound.push(...chunk);
       }
     }
@@ -265,7 +314,9 @@ export async function POST(request: Request) {
           `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(
             identifier.name
           )}`,
-          { headers: scryfallHeaders }
+          {
+            headers: scryfallHeaders,
+          }
         );
 
         if (!response.ok) {
@@ -274,7 +325,11 @@ export async function POST(request: Request) {
         }
 
         const card: ScryfallCard = await response.json();
-        cards.push({ ...card, requested_name: identifier.name });
+
+        cards.push({
+          ...card,
+          requested_name: identifier.name,
+        });
       } catch {
         stillNotFound.push(identifier);
       }
@@ -282,10 +337,15 @@ export async function POST(request: Request) {
 
     await cacheCards(cards);
 
-    return Response.json({
-      cards: [...cachedCards, ...cards],
-      notFound: stillNotFound,
-    });
+    return Response.json(
+      {
+        cards: [...cachedCards, ...cards],
+        notFound: stillNotFound,
+      },
+      {
+        headers: corsHeaders,
+      }
+    );
   } catch (error) {
     console.error("Erro em /api/scryfall/cards:", error);
 
@@ -295,7 +355,10 @@ export async function POST(request: Request) {
         notFound: [],
         error: "Não foi possível consultar as cartas.",
       },
-      { status: 500 }
+      {
+        status: 500,
+        headers: corsHeaders,
+      }
     );
   }
 }
@@ -306,15 +369,24 @@ export async function GET(request: Request) {
 
   if (!name) {
     return Response.json(
-      { error: "Informe o nome da carta." },
-      { status: 400 }
+      {
+        error: "Informe o nome da carta.",
+      },
+      {
+        status: 400,
+        headers: corsHeaders,
+      }
     );
   }
 
   const fakePostRequest = new Request(request.url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ identifiers: [{ name }] }),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      identifiers: [{ name }],
+    }),
   });
 
   return POST(fakePostRequest);
