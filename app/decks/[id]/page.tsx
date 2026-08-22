@@ -398,21 +398,6 @@ export default function DeckPage() {
   const [deckCards, setDeckCards] = useState<DeckCardRow[]>([]);
   const [selectedCard, setSelectedCard] =
     useState<DeckCardRow | null>(null);
-    useEffect(() => {
-  if (!selectedCard) return;
-
-  function handleEscape(event: KeyboardEvent) {
-    if (event.key === "Escape") {
-      setSelectedCard(null);
-    }
-  }
-
-  window.addEventListener("keydown", handleEscape);
-
-  return () => {
-    window.removeEventListener("keydown", handleEscape);
-  };
-}, [selectedCard]);
   const [organizeBy, setOrganizeBy] = useState("Tipo");
   const [viewMode, setViewMode] = useState("Stack");
 
@@ -429,6 +414,23 @@ export default function DeckPage() {
   const [deleting, setDeleting] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
   const priceMenuRef = useRef<HTMLDivElement | null>(null);
+
+
+  useEffect(() => {
+    if (!selectedCard) return;
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSelectedCard(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [selectedCard]);
 
   const parsedImport = useMemo(
     () => parseImportList(importText),
@@ -1676,16 +1678,17 @@ export default function DeckPage() {
           <section className="pt-10 pb-8">
             {/* BARRA DO DECK */}
             <div className="rounded-2xl border border-white/10 bg-white/[0.015]">
-              <div
-                className={`
-                  grid gap-3 border-b border-white/10 p-3
-                  ${
-                    isOwner
-                      ? "xl:grid-cols-[1.5fr_0.75fr_0.75fr_1.25fr]"
-                      : "xl:grid-cols-[0.75fr_0.75fr_1.5fr]"
-                  }
-                `}
-              >
+              <div className="overflow-x-auto border-b border-white/10">
+                <div
+                  className={`
+                    grid min-w-[1100px] gap-3 p-3
+                    ${
+                      isOwner
+                        ? "grid-cols-[1.5fr_0.75fr_0.75fr_1.25fr]"
+                        : "grid-cols-[0.75fr_0.75fr_1.5fr]"
+                    }
+                  `}
+                >
                 {/* PROCURAR / ADICIONAR CARTA */}
                 {isOwner && (
                   <div>
@@ -1888,9 +1891,10 @@ export default function DeckPage() {
                   </div>
                 </div>
               </div>
+              </div>
 
               {/* ÁREA DAS CARTAS */}
-              <div className="min-h-[420px] px-5 py-8 md:px-6 lg:px-8">
+              <div className="min-h-[420px] px-5 py-4 md:px-6 lg:px-8">
                 {deckCards.length === 0 ? (
                   <div className="max-w-xl py-2">
                     <p className="text-lg text-white/55">
@@ -1921,7 +1925,7 @@ export default function DeckPage() {
                   </div>
                 ) : (
                   <div>
-                    <div className="mb-5 flex items-end justify-between gap-4">
+                    <div className="mb-2 flex items-end justify-between gap-4">
                       <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-white/25">
                           Lista do deck
@@ -1934,14 +1938,20 @@ export default function DeckPage() {
                     </div>
 
                     <div
-  className="overflow-x-auto pb-6"
-  style={{ zoom: 0.92 }}
->
-                      <div className="flex min-w-max items-start justify-start gap-3 pl-0 pr-2 pt-4">
+                      className="w-full overflow-x-hidden pb-6"
+                      style={{ zoom: 0.688 }}
+                    >
+                      <div className="flex min-w-max items-start justify-start gap-2 px-1 pt-1">
                         {deckCardsByType.map((group) => (
                           <section
                             key={group.name}
-                            className="w-[255px] shrink-0"
+                            className="
+                              w-[215px]
+                              shrink-0
+                              lg:w-[225px]
+                              xl:w-[240px]
+                              2xl:w-[255px]
+                            "
                           >
                             <div className="mb-3 border-b border-white/10 pb-2">
                               <div className="flex items-center justify-between gap-3">
@@ -1967,15 +1977,18 @@ export default function DeckPage() {
                                       group/card
                                       relative
                                       mx-auto
-                                      w-[248px]
+                                      w-[208px]
+                                      lg:w-[218px]
+                                      xl:w-[233px]
+                                      2xl:w-[248px]
                                       transition-all
                                       duration-200
                                       ease-out
                                       hover:z-40
-                                      hover:mb-[185px]
+                                      hover:mb-[220px]
                                     "
                                     style={{
-                                      marginTop: index === 0 ? 0 : -270,
+                                      marginTop: index === 0 ? 0 : -220,
                                     }}
                                   >
                                     <div
