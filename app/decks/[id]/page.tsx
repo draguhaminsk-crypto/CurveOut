@@ -211,6 +211,20 @@ type DeckCardRow = {
   card?: ResolvedCard;
 };
 
+type CardPrinting = {
+  scryfall_id: string;
+  oracle_id: string | null;
+  name: string;
+  type_line: string | null;
+  image_uri: string | null;
+  image_uri_large: string | null;
+  set: string;
+  set_name: string;
+  collector_number: string;
+  lang: string;
+  released_at: string;
+};
+
 type CardTypeGroup =
   | "Comandante"
   | "Artefatos"
@@ -395,6 +409,18 @@ export default function DeckPage() {
   const [deckCards, setDeckCards] = useState<DeckCardRow[]>([]);
   const [selectedCard, setSelectedCard] =
     useState<DeckCardRow | null>(null);
+  const [selectedCardQuantity, setSelectedCardQuantity] =
+    useState("1");
+  const [printingPickerOpen, setPrintingPickerOpen] =
+    useState(false);
+  const [printingOptions, setPrintingOptions] =
+    useState<CardPrinting[]>([]);
+  const [printingLoading, setPrintingLoading] =
+    useState(false);
+  const [changingPrinting, setChangingPrinting] =
+    useState(false);
+  const [printingError, setPrintingError] =
+    useState("");
   const [organizeBy, setOrganizeBy] = useState("Tipo");
   const [viewMode, setViewMode] = useState("Stack");
 
@@ -414,10 +440,21 @@ export default function DeckPage() {
 
 
   useEffect(() => {
+    if (selectedCard) {
+      setSelectedCardQuantity(String(selectedCard.quantity));
+    }
+  }, [selectedCard]);
+
+  useEffect(() => {
     if (!selectedCard) return;
 
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (printingPickerOpen) {
+          setPrintingPickerOpen(false);
+          return;
+        }
+
         setSelectedCard(null);
       }
     }
@@ -427,7 +464,7 @@ export default function DeckPage() {
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [selectedCard]);
+  }, [selectedCard, printingPickerOpen]);
 
   const parsedImport = useMemo(
     () => parseImportList(importText),
@@ -743,20 +780,172 @@ export default function DeckPage() {
     };
   }, [priceOpen]);
 
-  async function increaseCardQuantity(row: DeckCardRow) {
-    if (!deck || !isOwner || !row.id) return;
+async function loadCardPrintings(row: DeckCardRow) {
+  const oracleId =
+    row.oracle_id ??
+    row.card?.oracle_id;
+
+  if (!oracleId) {
+    setPrintingError(
+      "Não foi possível identificar as impressões desta carta."
+    );
+    return;
+  }
+
+  setPrintingLoading(true);
+  setPrintingError("");
+  setPrintingOptions([]);
+
+  try {
+    const response = await fetch(
+      `/api/scryfall/printings?oracle_id=${encodeURIComponent(
+        oracleId
+      )}`,
+      {
+        cache: "no-store",
+      }
+    );
+
+    const result = (await response.json()) as {
+      printings?: CardPrinting[];
+      error?: string;
+    };
+
+    if (!response.ok) {
+      setPrintingError(
+        result.error ??
+          "Não foi possível carregar as impressões."
+      );
+
+      return;
+    }
+
+    setPrintingOptions(
+      result.printings ?? []
+    );
+  } catch (error) {
+    console.error(
+      "Erro ao carregar impressões:",
+      error
+    );
+
+    setPrintingError(
+      "Não foi possível carregar as impressões."
+    );
+  } finally {
+    setPrintingLoading(false);
+  }
+}
+
+  async function changeCardPrinting(printing: CardPrinting) {
+    if (
+      !deck ||
+      !selectedCard ||
+      !selectedCard.id ||
+      !isOwner ||
+      changingPrinting
+    ) {
+      return;
+    }
+
+    if (printing.scryfall_id === selectedCard.scryfall_id) {
+      setPrintingPickerOpen(false);
+      return;
+    }
+
+    setChangingPrinting(true);
+    setPrintingError("");
+
+    const { data: existingPrinting, error: existingPrintingError } =
+      await supabase
+        .from("deck_cards")
+        .select("id, quantity")
+        .eq("deck_id", deck.id)
+        .eq("scryfall_id", printing.scryfall_id)
+        .eq("board", selectedCard.board)
+        .neq("id", selectedCard.id)
+        .maybeSingle();
+
+    if (existingPrintingError) {
+      console.error(
+        "Erro ao verificar impressão existente:",
+        existingPrintingError
+      );
+      setPrintingError("Não foi possível trocar a impressão.");
+      setChangingPrinting(false);
+      return;
+    }
+
+    if (existingPrinting) {
+      const { error: mergeError } = await supabase
+        .from("deck_cards")
+        .update({
+          quantity: existingPrinting.quantity + selectedCard.quantity,
+        })
+        .eq("id", existingPrinting.id);
+
+      if (mergeError) {
+        console.error("Erro ao juntar impressões:", mergeError);
+        setPrintingError("Não foi possível trocar a impressão.");
+        setChangingPrinting(false);
+        return;
+      }
+
+      const { error: deleteOldError } = await supabase
+        .from("deck_cards")
+        .delete()
+        .eq("id", selectedCard.id);
+
+      if (deleteOldError) {
+        console.error(
+          "Erro ao remover impressão anterior:",
+          deleteOldError
+        );
+        setPrintingError("Não foi possível finalizar a troca.");
+        setChangingPrinting(false);
+        return;
+      }
+
+      setSelectedCard(null);
+      setPrintingPickerOpen(false);
+      await loadDeckCards(deck.id);
+      setChangingPrinting(false);
+      return;
+    }
 
     const { error } = await supabase
       .from("deck_cards")
       .update({
-        quantity: row.quantity + 1,
+        scryfall_id: printing.scryfall_id,
+        oracle_id: printing.oracle_id,
       })
-      .eq("id", row.id);
+      .eq("id", selectedCard.id);
 
     if (error) {
-      console.error("Erro ao aumentar quantidade:", error);
+      console.error("Erro ao trocar impressão:", error);
+      setPrintingError("Não foi possível trocar a impressão.");
+      setChangingPrinting(false);
       return;
     }
+
+    const updatedCard: DeckCardRow = {
+      ...selectedCard,
+      scryfall_id: printing.scryfall_id,
+      oracle_id: printing.oracle_id,
+      card: {
+        id: printing.scryfall_id,
+        oracle_id: printing.oracle_id ?? undefined,
+        name: printing.name,
+        type_line: printing.type_line ?? undefined,
+        image_uris: {
+          normal: printing.image_uri ?? undefined,
+          large: printing.image_uri_large ?? undefined,
+        },
+      },
+    };
+
+    setSelectedCard(updatedCard);
+    setPrintingPickerOpen(false);
 
     const updatedAt = new Date().toISOString();
 
@@ -772,6 +961,58 @@ export default function DeckPage() {
     });
 
     await loadDeckCards(deck.id);
+    setChangingPrinting(false);
+  }
+
+  async function setCardQuantity(
+    row: DeckCardRow,
+    newQuantity: number
+  ) {
+    if (!deck || !isOwner || !row.id) return;
+
+    const quantity = Math.max(1, Math.floor(newQuantity));
+
+    const { error } = await supabase
+      .from("deck_cards")
+      .update({
+        quantity,
+      })
+      .eq("id", row.id);
+
+    if (error) {
+      console.error("Erro ao alterar quantidade:", error);
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+
+    await supabase
+      .from("decks")
+      .update({
+        updated_at: updatedAt,
+      })
+      .eq("id", deck.id)
+      .eq("owner_id", deck.owner_id);
+
+    setDeck({
+      ...deck,
+      updated_at: updatedAt,
+    });
+
+    if (selectedCard?.id === row.id) {
+      setSelectedCard({
+        ...selectedCard,
+        quantity,
+      });
+    }
+
+    setSelectedCardQuantity(String(quantity));
+
+    await loadDeckCards(deck.id);
+  }
+
+  async function increaseCardQuantity(row: DeckCardRow) {
+    await setCardQuantity(row, row.quantity + 1);
   }
 
   async function decreaseCardQuantity(row: DeckCardRow) {
@@ -787,34 +1028,13 @@ export default function DeckPage() {
         console.error("Erro ao remover carta:", error);
         return;
       }
-    } else {
-      const { error } = await supabase
-        .from("deck_cards")
-        .update({
-          quantity: row.quantity - 1,
-        })
-        .eq("id", row.id);
 
-      if (error) {
-        console.error("Erro ao diminuir quantidade:", error);
-        return;
-      }
+      setSelectedCard(null);
+      await loadDeckCards(deck.id);
+      return;
     }
 
-    const updatedAt = new Date().toISOString();
-
-    await supabase
-      .from("decks")
-      .update({ updated_at: updatedAt })
-      .eq("id", deck.id)
-      .eq("owner_id", deck.owner_id);
-
-    setDeck({
-      ...deck,
-      updated_at: updatedAt,
-    });
-
-    await loadDeckCards(deck.id);
+    await setCardQuantity(row, row.quantity - 1);
   }
 
   async function addCardToDeck(cardName: string) {
@@ -2160,79 +2380,450 @@ export default function DeckPage() {
       </div>
 
       {selectedCard && (
-        <div
+  <div
+    className="
+      fixed inset-0 z-[100]
+      flex items-center justify-center
+      bg-black/80
+      px-4 py-6
+      backdrop-blur-md
+    "
+    onMouseDown={(event) => {
+      if (event.target === event.currentTarget) {
+        setSelectedCard(null);
+      }
+    }}
+  >
+    <div
+      className="
+        relative
+        w-full max-w-6xl
+        overflow-hidden
+        rounded-[24px]
+        border border-white/10
+        bg-[#0d0d10]
+        shadow-2xl
+      "
+    >
+      {/* TOPO */}
+      <div className="flex items-start justify-between gap-6 border-b border-white/10 px-8 py-4">
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.22em] text-white/25">
+            Detalhes da carta
+          </p>
+
+          <h2 className="mt-2 text-2xl font-semibold text-white">
+            {selectedCard.card?.name ?? "Carta"}
+          </h2>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setSelectedCard(null)}
           className="
-            fixed inset-0 z-[100]
-            flex items-center justify-center
-            bg-black/75
-            px-4
-            backdrop-blur-sm
+            flex h-9 w-9 items-center justify-center
+            rounded-xl
+            border border-white/10
+            text-lg text-white/40
+            transition
+            hover:border-white/20
+            hover:bg-white/5
+            hover:text-white
           "
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setSelectedCard(null);
-            }
-          }}
         >
-          <div
-            className="
-              w-full max-w-md
-              rounded-2xl
-              border border-white/15
-              bg-[#111114]
-              p-6
-              shadow-2xl
-            "
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-white/30">
-                  Carta
-                </p>
+          ×
+        </button>
+      </div>
 
-                <h2 className="mt-2 text-xl font-semibold text-white">
-                  {selectedCard.card?.name ?? "Carta"}
-                </h2>
-              </div>
+      {/* CONTEÚDO */}
+      <div
+        className="
+          grid
+          items-center
+          gap-6
+          px-8 py-7
+          lg:grid-cols-[1fr_350px_1fr]
+        "
+      >
+        {/* LADO ESQUERDO */}
+        <div className="space-y-8 pr-10">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
+              Impressão
+            </p>
 
-              <button
-                type="button"
-                onClick={() => setSelectedCard(null)}
-                className="
-                  flex h-8 w-8 items-center justify-center
-                  rounded-lg
-                  border border-white/10
-                  text-white/45
-                  transition
-                  hover:bg-white/5
-                  hover:text-white
-                "
-              >
-                ×
-              </button>
-            </div>
-
-            <div
-              className="
-                mt-6
-                rounded-xl
-                border border-dashed border-white/15
-                bg-white/[0.025]
-                px-5 py-10
-                text-center
-              "
-            >
-              <p className="text-sm text-white/55">
-                Funcionou 🎉
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <p className="text-sm font-medium text-white/75">
+                Edição atual
               </p>
 
-              <p className="mt-2 text-xs text-white/25">
-                Aqui entrarão impressão, edição, idioma e outras opções da carta.
+              <p className="mt-1 text-xs text-white/30">
+                Dados da impressão entram aqui
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
+              Coleção
+            </p>
+
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <p className="text-sm text-white/65">
+                Set · #000
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
+              Idioma
+            </p>
+
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <p className="text-sm text-white/65">
+                Inglês
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
+              Compra aqui
+            </p>
+
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <p className="text-sm text-white/65">
+                Ver na LigaMagic
               </p>
             </div>
           </div>
         </div>
+
+        {/* CARTA CENTRAL */}
+        <div className="flex flex-col items-center">
+          <div
+            className="
+              relative
+              w-full max-w-[330px]
+              overflow-hidden
+              rounded-[14px]
+              border border-white/10
+              bg-[#151518]
+              shadow-2xl shadow-black/50
+            "
+          >
+            {getProxiedCardImage(selectedCard.card) ? (
+              <img
+                src={getProxiedCardImage(selectedCard.card) ?? ""}
+                alt={selectedCard.card?.name ?? "Carta"}
+                className="block aspect-[63/88] w-full object-cover"
+              />
+            ) : (
+              <div className="flex aspect-[63/88] items-center justify-center px-6 text-center">
+                <p className="text-sm text-white/35">
+                  Imagem indisponível
+                </p>
+              </div>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setPrintingPickerOpen(true);
+              void loadCardPrintings(selectedCard);
+            }}
+            className="
+              mt-5
+              rounded-xl
+              border border-white/10
+              px-5 py-2.5
+              text-xs font-medium
+              text-white/50
+              transition
+              hover:border-white/20
+              hover:bg-white/5
+              hover:text-white
+            "
+          >
+            Trocar impressão
+          </button>
+        </div>
+
+        {/* LADO DIREITO */}
+        <div className="space-y-8 pl-10">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
+              No deck
+            </p>
+
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <p className="text-sm font-medium text-white/75">
+                Quantidade
+              </p>
+
+              <div className="mt-3 flex items-center gap-3">
+                {isOwner && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void decreaseCardQuantity(selectedCard);
+                    }}
+                    className="
+                      flex h-8 w-8 items-center justify-center
+                      rounded-lg
+                      border border-white/10
+                      text-white/60
+                      transition
+                      hover:bg-white/5
+                      hover:text-white
+                    "
+                  >
+                    −
+                  </button>
+                )}
+
+                <input
+                  type="number"
+                  min={1}
+                  value={selectedCardQuantity}
+                  onChange={(event) => {
+                    setSelectedCardQuantity(event.target.value);
+                  }}
+                  onBlur={() => {
+                    const quantity = Number(selectedCardQuantity);
+
+                    if (!Number.isFinite(quantity) || quantity < 1) {
+                      setSelectedCardQuantity(
+                        String(selectedCard.quantity)
+                      );
+                      return;
+                    }
+
+                    void setCardQuantity(selectedCard, quantity);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  className="
+                    h-8 w-14
+                    rounded-lg
+                    border border-white/10
+                    bg-transparent
+                    text-center
+                    text-base font-semibold
+                    text-white
+                    outline-none
+                    transition
+                    focus:border-white/30
+                    [&::-webkit-inner-spin-button]:appearance-none
+                    [&::-webkit-outer-spin-button]:appearance-none
+                  "
+                />
+
+                {isOwner && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void increaseCardQuantity(selectedCard);
+                    }}
+                    className="
+                      flex h-8 w-8 items-center justify-center
+                      rounded-lg
+                      border border-white/10
+                      text-white/60
+                      transition
+                      hover:bg-white/5
+                      hover:text-white
+                    "
+                  >
+                    +
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
+              Posição
+            </p>
+
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <p className="text-sm text-white/65">
+                {selectedCard.board === "commander"
+                  ? "Comandante"
+                  : selectedCard.board === "sideboard"
+                    ? "Sideboard"
+                    : selectedCard.board === "maybeboard"
+                      ? "Maybeboard"
+                      : "Mainboard"}
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
+              Tipo
+            </p>
+
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <p className="text-sm text-white/65">
+                {selectedCard.card?.type_line ?? "—"}
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
+              Preço
+            </p>
+
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <p className="text-sm text-white/65">
+                R$ —
+              </p>
+
+              <p className="mt-1 text-xs text-white/25">
+                Preços da LigaMagic entram aqui depois
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+      {printingPickerOpen && (
+        <div
+          className="
+            absolute inset-0 z-50
+            flex flex-col
+            bg-[#0d0d10]/98
+            backdrop-blur-xl
+          "
+        >
+          <div
+            className="
+              flex items-center justify-between
+              border-b border-white/10
+              px-8 py-5
+            "
+          >
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/25">
+                Impressões disponíveis
+              </p>
+
+              <h3 className="mt-1 text-xl font-semibold">
+                {selectedCard.card?.name}
+              </h3>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setPrintingPickerOpen(false)}
+              className="
+                flex h-9 w-9 items-center justify-center
+                rounded-xl
+                border border-white/10
+                text-white/40
+                transition
+                hover:bg-white/5
+                hover:text-white
+              "
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-8">
+            {printingLoading ? (
+              <div className="flex min-h-[350px] items-center justify-center text-sm text-white/35">
+                Carregando impressões...
+              </div>
+            ) : printingError ? (
+              <div className="flex min-h-[350px] items-center justify-center text-sm text-red-300/70">
+                {printingError}
+              </div>
+            ) : printingOptions.length === 0 ? (
+              <div className="flex min-h-[350px] items-center justify-center text-sm text-white/35">
+                Nenhuma outra impressão encontrada.
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {printingOptions.map((printing) => {
+                  const selected =
+                    printing.scryfall_id === selectedCard.scryfall_id;
+
+                  const image =
+                    printing.image_uri_large ?? printing.image_uri;
+
+                  return (
+                    <button
+                      key={printing.scryfall_id}
+                      type="button"
+                      disabled={changingPrinting}
+                      onClick={() => {
+                        void changeCardPrinting(printing);
+                      }}
+                      className={`
+                        group rounded-xl border p-3 text-left transition
+                        ${
+                          selected
+                            ? "border-white/35 bg-white/[0.07]"
+                            : "border-white/10 bg-white/[0.02] hover:border-white/25 hover:bg-white/[0.04]"
+                        }
+                        disabled:cursor-wait
+                        disabled:opacity-60
+                      `}
+                    >
+                      <div className="overflow-hidden rounded-[9px] bg-black/30">
+                        {image ? (
+                          <img
+                            src={`/api/scryfall/image?url=${encodeURIComponent(
+                              image
+                            )}`}
+                            alt={printing.name}
+                            className="aspect-[63/88] w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex aspect-[63/88] items-center justify-center text-xs text-white/25">
+                            Sem imagem
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-sm font-medium text-white/75">
+                            {printing.set_name}
+                          </p>
+
+                          {selected && (
+                            <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[9px] font-semibold text-black">
+                              ATUAL
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="mt-1 text-xs text-white/30">
+                          {printing.set} · #{printing.collector_number} ·{" "}
+                          {printing.lang}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
       )}
+
+    </div>
+  </div>
+)}
 
       {shareDeckOpen && (
         <div
