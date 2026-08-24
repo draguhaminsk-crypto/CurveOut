@@ -171,6 +171,10 @@ type ResolvedCard = {
   name: string;
   requested_name?: string;
   type_line?: string;
+  oracle_text?: string;
+  colors?: string[];
+  color_identity?: string[];
+  raw_text?: string;
   image_uris?: {
     normal?: string;
     large?: string;
@@ -236,6 +240,13 @@ type CardTypeGroup =
   | "Feitiços"
   | "Outros";
 
+type OrganizeBy =
+  | "Categoria"
+  | "Tipo"
+  | "Identidade de cor"
+  | "Cor"
+  | "Nome";
+
 const cardTypeGroupOrder: CardTypeGroup[] = [
   "Comandante",
   "Artefatos",
@@ -247,6 +258,69 @@ const cardTypeGroupOrder: CardTypeGroup[] = [
   "Feitiços",
   "Outros",
 ];
+
+const colorGroupOrder = [
+  "Comandante",
+  "Branco",
+  "Azul",
+  "Preto",
+  "Vermelho",
+  "Verde",
+  "Multicolorida",
+  "Incolor",
+];
+
+const colorNames: Record<string, string> = {
+  W: "Branco",
+  U: "Azul",
+  B: "Preto",
+  R: "Vermelho",
+  G: "Verde",
+};
+
+const colorOrder = ["W", "U", "B", "R", "G"];
+
+function normalizeColors(colors?: string[] | null) {
+  return [...(colors ?? [])]
+    .filter((color) => colorOrder.includes(color))
+    .sort((a, b) => colorOrder.indexOf(a) - colorOrder.indexOf(b));
+}
+
+function getColorsFromCardData(cardData: unknown): string[] {
+  if (!cardData || typeof cardData !== "object") return [];
+
+  const colors = (cardData as { colors?: unknown }).colors;
+
+  if (!Array.isArray(colors)) return [];
+
+  return colors.filter((color): color is string => typeof color === "string");
+}
+
+function getOracleTextFromCardData(cardData: unknown): string {
+  if (!cardData || typeof cardData !== "object") return "";
+
+  const data = cardData as {
+    oracle_text?: unknown;
+    card_faces?: unknown;
+  };
+
+  if (typeof data.oracle_text === "string") {
+    return data.oracle_text;
+  }
+
+  if (Array.isArray(data.card_faces)) {
+    return data.card_faces
+      .map((face) => {
+        if (!face || typeof face !== "object") return "";
+        const oracleText = (face as { oracle_text?: unknown }).oracle_text;
+        return typeof oracleText === "string" ? oracleText : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return "";
+}
 
 function getCardTypeGroup(row: DeckCardRow): CardTypeGroup {
   if (row.board === "commander") {
@@ -264,6 +338,130 @@ function getCardTypeGroup(row: DeckCardRow): CardTypeGroup {
   if (typeLine.includes("sorcery")) return "Feitiços";
 
   return "Outros";
+}
+
+function getFunctionalCategory(row: DeckCardRow) {
+  if (row.board === "commander") return "Comandante";
+
+ const typeLine =
+  row.card?.type_line?.toLocaleLowerCase("pt-BR") ?? "";
+
+const oracleText =
+  row.card?.oracle_text?.toLocaleLowerCase("pt-BR") ?? "";
+
+const rawText =
+  row.card?.raw_text?.toLocaleLowerCase("pt-BR") ?? "";
+
+const text = `${typeLine} ${oracleText} ${rawText}`;
+
+  // Categorias de função. A ordem importa: categorias mais específicas
+  // são verificadas antes das categorias genéricas.
+  if (/infect|toxic|poison counter|poison counters/.test(text)) return "Infect";
+  if (/venture into the dungeon|take the initiative|dungeon/.test(text)) return "Dungeon";
+  if (/copy target|create a token that's a copy|create a token that is a copy|copy of|triggers an additional time|trigger an additional time/.test(text)) return "Cópia";
+  if (/gain control of|you control enchanted|control of target/.test(text)) return "Roubo";
+  if (/can't be blocked|cannot be blocked|menace|flying|shadow|horsemanship/.test(text)) return "Evasão";
+  if (/mill \d|mills? \d|put the top .* cards? of .* library into .* graveyard/.test(text)) return "Mill";
+  if (/search your library/.test(text)) return "Tutor";
+  if (/counter target spell|counter target activated|counter target triggered|counter target ability/.test(text)) return "Counter";
+  if (/destroy all|exile all|each creature gets -\d|all creatures get -\d|destroy each/.test(text)) return "Limpeza de mesa";
+  if (/destroy target|exile target|deals? \d+ damage to target creature|target creature gets -\d/.test(text)) return "Remoção";
+  if (/return .* from your graveyard to the battlefield|put .* from .* graveyard onto the battlefield|reanimate/.test(text)) return "Reanimação";
+  if (/return .* from your graveyard to your hand|return target .* card from .* graveyard|return up to .* cards? from .* graveyard/.test(text)) return "Recursão";
+  if (/draw (a|one|two|three|four|five|\d+) cards?|draw cards equal|draw that many cards|draw an additional card/.test(text)) return "Compra";
+  if (/each opponent loses|target opponent loses|opponents lose|loses? \d+ life/.test(text)) return "Dreno";
+  if (/gain \d+ life|gains? life|lifelink/.test(text)) return "Ganho de vida";
+  if (/add \{[wubrgc]|add one mana|add two mana|add three mana|search your library for .* land card|put .* land card onto the battlefield/.test(text)) return "Ramp";
+  if (/hexproof|indestructible|protection from|phase out|regenerate|prevent all damage/.test(text)) return "Proteção";
+  if (/discard a card|discards? \d|target player discards|each opponent discards/.test(text)) return "Descarte";
+  if (/sacrifice a creature|sacrifice a permanent|sacrifice another|sacrifice an artifact|sacrifice it/.test(text)) return "Sacrifício";
+  if (/create .* token|creates? .* token|create a token/.test(text)) return "Tokens";
+  if (/exile .* you control.*return|exile target .* you control.*return|return that card to the battlefield|return it to the battlefield under its owner's control/.test(text)) return "Blink";
+
+  // Quando não houver uma função clara no texto, usa o tipo principal
+  // como fallback para a carta não cair numa categoria genérica demais.
+  if (typeLine.includes("land")) return "Terrenos";
+  if (typeLine.includes("creature")) return "Criaturas";
+  if (typeLine.includes("artifact")) return "Artefatos";
+  if (typeLine.includes("enchantment")) return "Encantamentos";
+  if (typeLine.includes("planeswalker")) return "Planeswalkers";
+  if (typeLine.includes("instant")) return "Instantâneas";
+  if (typeLine.includes("sorcery")) return "Feitiços";
+
+  return "Outros";
+}
+
+function getColorGroup(row: DeckCardRow) {
+  if (row.board === "commander") return "Comandante";
+
+  const colors = normalizeColors(row.card?.colors);
+
+  if (colors.length === 0) return "Incolor";
+  if (colors.length > 1) return "Multicolorida";
+
+  return colorNames[colors[0]] ?? "Incolor";
+}
+
+function getColorIdentityGroup(row: DeckCardRow) {
+  if (row.board === "commander") return "Comandante";
+
+  const identity = normalizeColors(row.card?.color_identity);
+
+  if (identity.length === 0) return "Incolor";
+
+  return identity.map((color) => colorNames[color] ?? color).join(" / ");
+}
+
+function getNameGroup(row: DeckCardRow) {
+  if (row.board === "commander") return "Comandante";
+
+  const name = (row.card?.name ?? row.scryfall_id).trim();
+  const firstCharacter = name.charAt(0).toLocaleUpperCase("pt-BR");
+
+  return /[A-ZÀ-ÖØ-Ý]/i.test(firstCharacter) ? firstCharacter : "#";
+}
+
+function getOrganizationGroup(row: DeckCardRow, organizeBy: OrganizeBy) {
+  switch (organizeBy) {
+    case "Tipo":
+      return getCardTypeGroup(row);
+    case "Identidade de cor":
+      return getColorIdentityGroup(row);
+    case "Cor":
+      return getColorGroup(row);
+    case "Nome":
+      return getNameGroup(row);
+    case "Categoria":
+    default:
+      return getFunctionalCategory(row);
+  }
+}
+
+function getGroupOrder(rows: DeckCardRow[], organizeBy: OrganizeBy) {
+  if (organizeBy === "Tipo") {
+    return cardTypeGroupOrder.filter((groupName) =>
+      rows.some((row) => getCardTypeGroup(row) === groupName)
+    );
+  }
+
+  if (organizeBy === "Cor") {
+    return colorGroupOrder.filter((groupName) =>
+      rows.some((row) => getColorGroup(row) === groupName)
+    );
+  }
+
+  const groups = Array.from(
+    new Set(rows.map((row) => getOrganizationGroup(row, organizeBy)))
+  );
+
+  return groups.sort((a, b) => {
+    if (a === "Comandante") return -1;
+    if (b === "Comandante") return 1;
+    if (a === "Incolor") return 1;
+    if (b === "Incolor") return -1;
+
+    return a.localeCompare(b, "pt-BR", { sensitivity: "base" });
+  });
 }
 
 type CurveOutSelectProps = {
@@ -421,7 +619,7 @@ export default function DeckPage() {
     useState(false);
   const [printingError, setPrintingError] =
     useState("");
-  const [organizeBy, setOrganizeBy] = useState("Tipo");
+  const [organizeBy, setOrganizeBy] = useState<OrganizeBy>("Categoria");
   const [viewMode, setViewMode] = useState("Stack");
 
   const [deckArt, setDeckArt] = useState("/hero-bg.jpg");
@@ -489,11 +687,21 @@ export default function DeckPage() {
   }, [deckCards, deckSearch]);
 
   const deckCardsByType = useMemo(() => {
-    return cardTypeGroupOrder
+    const groupOrder = getGroupOrder(visibleDeckCards, organizeBy);
+
+    return groupOrder
       .map((groupName) => {
-        const cards = visibleDeckCards.filter(
-          (row) => getCardTypeGroup(row) === groupName
-        );
+        const cards = visibleDeckCards
+          .filter(
+            (row) => getOrganizationGroup(row, organizeBy) === groupName
+          )
+          .sort((a, b) =>
+            (a.card?.name ?? a.scryfall_id).localeCompare(
+              b.card?.name ?? b.scryfall_id,
+              "pt-BR",
+              { sensitivity: "base" }
+            )
+          );
 
         return {
           name: groupName,
@@ -505,7 +713,7 @@ export default function DeckPage() {
         };
       })
       .filter((group) => group.cards.length > 0);
-  }, [visibleDeckCards]);
+  }, [visibleDeckCards, organizeBy]);
 
 
   async function loadDeckCards(deckId: string) {
@@ -536,7 +744,7 @@ export default function DeckPage() {
     const { data: cardData, error: cardsError } = await supabase
       .from("cards")
       .select(
-        "scryfall_id, oracle_id, name, type_line, image_uri, image_uri_large"
+        "scryfall_id, oracle_id, name, type_line, color_identity, card_data, image_uri, image_uri_large"
       )
       .in("scryfall_id", scryfallIds);
 
@@ -554,6 +762,14 @@ export default function DeckPage() {
         oracle_id: card.oracle_id ?? undefined,
         name: card.name,
         type_line: card.type_line ?? undefined,
+        oracle_text: getOracleTextFromCardData(card.card_data),
+raw_text: JSON.stringify(card.card_data ?? {}).toLocaleLowerCase("pt-BR"),
+colors: getColorsFromCardData(card.card_data),
+        color_identity: Array.isArray(card.color_identity)
+          ? card.color_identity.filter(
+              (color): color is string => typeof color === "string"
+            )
+          : [],
         image_uris:
           card.image_uri || card.image_uri_large
             ? {
@@ -780,62 +996,74 @@ export default function DeckPage() {
     };
   }, [priceOpen]);
 
-async function loadCardPrintings(row: DeckCardRow) {
-  const oracleId =
-    row.oracle_id ??
-    row.card?.oracle_id;
+  async function loadCardPrintings(row: DeckCardRow) {
+    const oracleId = row.oracle_id ?? row.card?.oracle_id;
 
-  if (!oracleId) {
-    setPrintingError(
-      "Não foi possível identificar as impressões desta carta."
-    );
-    return;
-  }
-
-  setPrintingLoading(true);
-  setPrintingError("");
-  setPrintingOptions([]);
-
-  try {
-    const response = await fetch(
-      `/api/scryfall/printings?oracle_id=${encodeURIComponent(
-        oracleId
-      )}`,
-      {
-        cache: "no-store",
-      }
-    );
-
-    const result = (await response.json()) as {
-      printings?: CardPrinting[];
-      error?: string;
-    };
-
-    if (!response.ok) {
+    if (!oracleId) {
       setPrintingError(
-        result.error ??
-          "Não foi possível carregar as impressões."
+        "Não foi possível identificar as impressões desta carta."
       );
-
       return;
     }
 
-    setPrintingOptions(
-      result.printings ?? []
-    );
-  } catch (error) {
-    console.error(
-      "Erro ao carregar impressões:",
-      error
+    setPrintingLoading(true);
+    setPrintingError("");
+    setPrintingOptions([]);
+
+    const { data, error } = await supabase
+      .from("cards")
+      .select(
+        "scryfall_id, oracle_id, name, type_line, image_uri, image_uri_large, card_data"
+      )
+      .eq("oracle_id", oracleId);
+
+    if (error) {
+      console.error("Erro ao buscar impressões:", error);
+      setPrintingError("Não foi possível carregar as impressões.");
+      setPrintingLoading(false);
+      return;
+    }
+
+    const printings: CardPrinting[] = (data ?? []).map((card) => {
+      const cardData = (card.card_data ?? {}) as Record<string, unknown>;
+
+      return {
+        scryfall_id: card.scryfall_id,
+        oracle_id: card.oracle_id,
+        name: card.name,
+        type_line: card.type_line,
+        image_uri: card.image_uri,
+        image_uri_large: card.image_uri_large,
+        set:
+          typeof cardData.set === "string"
+            ? cardData.set.toUpperCase()
+            : "—",
+        set_name:
+          typeof cardData.set_name === "string"
+            ? cardData.set_name
+            : "Edição desconhecida",
+        collector_number:
+          typeof cardData.collector_number === "string"
+            ? cardData.collector_number
+            : "—",
+        lang:
+          typeof cardData.lang === "string"
+            ? cardData.lang.toUpperCase()
+            : "—",
+        released_at:
+          typeof cardData.released_at === "string"
+            ? cardData.released_at
+            : "",
+      };
+    });
+
+    printings.sort((a, b) =>
+      b.released_at.localeCompare(a.released_at)
     );
 
-    setPrintingError(
-      "Não foi possível carregar as impressões."
-    );
-  } finally {
+    setPrintingOptions(printings);
     setPrintingLoading(false);
   }
-}
 
   async function changeCardPrinting(printing: CardPrinting) {
     if (
@@ -2050,12 +2278,13 @@ async function loadCardPrintings(row: DeckCardRow) {
 
                   <CurveOutSelect
                     value={organizeBy}
-                    onChange={setOrganizeBy}
+                    onChange={(value) => setOrganizeBy(value as OrganizeBy)}
                     options={[
+                      "Categoria",
                       "Cor",
                       "Identidade de cor",
+                      "Nome",
                       "Tipo",
-                      "Categoria",
                     ]}
                   />
                 </div>
@@ -3112,6 +3341,24 @@ async function loadCardPrintings(row: DeckCardRow) {
               >
                 Baixar .txt
               </button>
+
+              <a
+                href="https://www.ligamagic.com.br/?view=dks/novo"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="
+                  inline-flex items-center justify-center
+                  rounded-lg
+                  border border-white/15
+                  px-4 py-2.5
+                  text-sm text-white/55
+                  transition
+                  hover:border-white/30
+                  hover:text-white
+                "
+              >
+                Criar na LigaMagic
+              </a>
 
               <button
                 type="button"
