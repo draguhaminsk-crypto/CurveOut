@@ -327,16 +327,13 @@ function CurveOutSelect({
       {open && (
         <div
           className="
-            absolute left-0 right-0 top-full z-40
-            mt-2
-            overflow-hidden
-            rounded-xl
-            border border-white/10
-            bg-[#111114]/95
-            p-1.5
-            shadow-2xl
-            backdrop-blur-xl
-          "
+  absolute left-0 top-full z-[9999]
+  mt-2 w-full
+  rounded-xl
+  border border-white/10
+  bg-[#111114]
+  shadow-2xl
+"
         >
           {options.map((option) => (
             <button
@@ -570,10 +567,14 @@ export default function DeckPage() {
         };
 
         if (!response.ok) {
-          throw new Error(
-            result.error ?? "Não foi possível pesquisar as cartas."
-          );
-        }
+  console.error(
+    result.error ?? "Não foi possível pesquisar as cartas."
+  );
+
+  setCardSearchResults([]);
+  setCardSearchOpen(false);
+  return;
+}
 
         const suggestions = (result.data ?? []).slice(0, 10);
 
@@ -1678,9 +1679,10 @@ export default function DeckPage() {
           <section className="pt-10 pb-8">
             {/* BARRA DO DECK */}
             <div className="rounded-2xl border border-white/10 bg-white/[0.015]">
-              <div className="overflow-x-auto border-b border-white/10">
+              <div className="overflow-visible border-b border-white/10">
                 <div
                   className={`
+                    relative z-20
                     grid min-w-[1100px] gap-3 p-3
                     ${
                       isOwner
@@ -1938,8 +1940,12 @@ export default function DeckPage() {
                     </div>
 
                     <div
-                      className="w-full overflow-x-hidden pb-6"
-                      style={{ zoom: 0.688 }}
+                      className="
+  w-full overflow-x-hidden pb-6
+  [zoom:0.69]
+  xl:[zoom:0.75]
+  2xl:[zoom:0.95]
+"
                     >
                       <div className="flex min-w-max items-start justify-start gap-2 px-1 pt-1">
                         {deckCardsByType.map((group) => (
