@@ -1,5 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ScryfallCard } from "./ScryfallCard";
+
+type ScryfallCard = {
+  id: string;
+  oracle_id?: string;
+  name: string;
+  type_line?: string;
+  set?: string;
+  set_name?: string;
+  collector_number?: string;
+  lang?: string;
+  released_at?: string;
+
+  image_uris?: {
+    normal?: string;
+    large?: string;
+  };
+
+  card_faces?: {
+    image_uris?: {
+      normal?: string;
+      large?: string;
+    };
+  }[];
+};
 
 type ScryfallSearchResponse = {
   data?: ScryfallCard[];
