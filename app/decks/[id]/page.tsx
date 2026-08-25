@@ -174,7 +174,6 @@ type ResolvedCard = {
   oracle_text?: string;
   colors?: string[];
   color_identity?: string[];
-  raw_text?: string;
   image_uris?: {
     normal?: string;
     large?: string;
@@ -343,16 +342,9 @@ function getCardTypeGroup(row: DeckCardRow): CardTypeGroup {
 function getFunctionalCategory(row: DeckCardRow) {
   if (row.board === "commander") return "Comandante";
 
- const typeLine =
-  row.card?.type_line?.toLocaleLowerCase("pt-BR") ?? "";
-
-const oracleText =
-  row.card?.oracle_text?.toLocaleLowerCase("pt-BR") ?? "";
-
-const rawText =
-  row.card?.raw_text?.toLocaleLowerCase("pt-BR") ?? "";
-
-const text = `${typeLine} ${oracleText} ${rawText}`;
+  const typeLine = row.card?.type_line?.toLocaleLowerCase("pt-BR") ?? "";
+  const oracleText = row.card?.oracle_text?.toLocaleLowerCase("pt-BR") ?? "";
+  const text = `${typeLine} ${oracleText}`;
 
   // Categorias de função. A ordem importa: categorias mais específicas
   // são verificadas antes das categorias genéricas.
@@ -763,8 +755,7 @@ export default function DeckPage() {
         name: card.name,
         type_line: card.type_line ?? undefined,
         oracle_text: getOracleTextFromCardData(card.card_data),
-raw_text: JSON.stringify(card.card_data ?? {}).toLocaleLowerCase("pt-BR"),
-colors: getColorsFromCardData(card.card_data),
+        colors: getColorsFromCardData(card.card_data),
         color_identity: Array.isArray(card.color_identity)
           ? card.color_identity.filter(
               (color): color is string => typeof color === "string"
@@ -1010,59 +1001,40 @@ colors: getColorsFromCardData(card.card_data),
     setPrintingError("");
     setPrintingOptions([]);
 
-    const { data, error } = await supabase
-      .from("cards")
-      .select(
-        "scryfall_id, oracle_id, name, type_line, image_uri, image_uri_large, card_data"
-      )
-      .eq("oracle_id", oracleId);
+    try {
+      const response = await fetch(
+        `/api/scryfall/printings?oracle_id=${encodeURIComponent(oracleId)}`,
+        {
+          cache: "no-store",
+        }
+      );
 
-    if (error) {
-      console.error("Erro ao buscar impressões:", error);
-      setPrintingError("Não foi possível carregar as impressões.");
-      setPrintingLoading(false);
-      return;
-    }
-
-    const printings: CardPrinting[] = (data ?? []).map((card) => {
-      const cardData = (card.card_data ?? {}) as Record<string, unknown>;
-
-      return {
-        scryfall_id: card.scryfall_id,
-        oracle_id: card.oracle_id,
-        name: card.name,
-        type_line: card.type_line,
-        image_uri: card.image_uri,
-        image_uri_large: card.image_uri_large,
-        set:
-          typeof cardData.set === "string"
-            ? cardData.set.toUpperCase()
-            : "—",
-        set_name:
-          typeof cardData.set_name === "string"
-            ? cardData.set_name
-            : "Edição desconhecida",
-        collector_number:
-          typeof cardData.collector_number === "string"
-            ? cardData.collector_number
-            : "—",
-        lang:
-          typeof cardData.lang === "string"
-            ? cardData.lang.toUpperCase()
-            : "—",
-        released_at:
-          typeof cardData.released_at === "string"
-            ? cardData.released_at
-            : "",
+      const result = (await response.json()) as {
+        printings?: CardPrinting[];
+        error?: string;
       };
-    });
 
-    printings.sort((a, b) =>
-      b.released_at.localeCompare(a.released_at)
-    );
+      if (!response.ok) {
+        console.error(
+          result.error ?? "Não foi possível carregar as impressões."
+        );
+        setPrintingError(
+          result.error ?? "Não foi possível carregar as impressões."
+        );
+        return;
+      }
 
-    setPrintingOptions(printings);
-    setPrintingLoading(false);
+      const printings = [...(result.printings ?? [])].sort((a, b) =>
+        b.released_at.localeCompare(a.released_at)
+      );
+
+      setPrintingOptions(printings);
+    } catch (error) {
+      console.error("Erro ao buscar impressões no Scryfall:", error);
+      setPrintingError("Não foi possível carregar as impressões.");
+    } finally {
+      setPrintingLoading(false);
+    }
   }
 
   async function changeCardPrinting(printing: CardPrinting) {
