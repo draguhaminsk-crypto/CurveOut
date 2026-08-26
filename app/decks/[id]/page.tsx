@@ -1,3 +1,6 @@
+
+
+
 "use client";
 
 import Link from "next/link";
@@ -172,16 +175,19 @@ type ResolvedCard = {
   requested_name?: string;
   type_line?: string;
   oracle_text?: string;
+  raw_text?: string;
   colors?: string[];
   color_identity?: string[];
   image_uris?: {
     normal?: string;
     large?: string;
+    art_crop?: string;
   };
   card_faces?: {
     image_uris?: {
       normal?: string;
       large?: string;
+      art_crop?: string;
     };
   }[];
 };
@@ -321,6 +327,44 @@ function getOracleTextFromCardData(cardData: unknown): string {
   return "";
 }
 
+function getArtCropFromCardData(cardData: unknown): string | undefined {
+  if (!cardData || typeof cardData !== "object") return undefined;
+
+  const data = cardData as {
+    image_uris?: unknown;
+    card_faces?: unknown;
+  };
+
+  if (data.image_uris && typeof data.image_uris === "object") {
+    const artCrop = (data.image_uris as { art_crop?: unknown }).art_crop;
+    if (typeof artCrop === "string" && artCrop) return artCrop;
+  }
+
+  if (Array.isArray(data.card_faces)) {
+    for (const face of data.card_faces) {
+      if (!face || typeof face !== "object") continue;
+      const imageUris = (face as { image_uris?: unknown }).image_uris;
+      if (!imageUris || typeof imageUris !== "object") continue;
+      const artCrop = (imageUris as { art_crop?: unknown }).art_crop;
+      if (typeof artCrop === "string" && artCrop) return artCrop;
+    }
+  }
+
+  return undefined;
+}
+
+function getCommanderArtImage(card?: ResolvedCard) {
+  return (
+    card?.image_uris?.art_crop ??
+    card?.card_faces?.[0]?.image_uris?.art_crop ??
+    card?.image_uris?.large ??
+    card?.image_uris?.normal ??
+    card?.card_faces?.[0]?.image_uris?.large ??
+    card?.card_faces?.[0]?.image_uris?.normal ??
+    null
+  );
+}
+
 function getCardTypeGroup(row: DeckCardRow): CardTypeGroup {
   if (row.board === "commander") {
     return "Comandante";
@@ -344,43 +388,174 @@ function getFunctionalCategory(row: DeckCardRow) {
 
   const typeLine = row.card?.type_line?.toLocaleLowerCase("pt-BR") ?? "";
   const oracleText = row.card?.oracle_text?.toLocaleLowerCase("pt-BR") ?? "";
-  const text = `${typeLine} ${oracleText}`;
 
-  // Categorias de função. A ordem importa: categorias mais específicas
-  // são verificadas antes das categorias genéricas.
-  if (/infect|toxic|poison counter|poison counters/.test(text)) return "Infect";
-  if (/venture into the dungeon|take the initiative|dungeon/.test(text)) return "Dungeon";
-  if (/copy target|create a token that's a copy|create a token that is a copy|copy of|triggers an additional time|trigger an additional time/.test(text)) return "Cópia";
-  if (/gain control of|you control enchanted|control of target/.test(text)) return "Roubo";
-  if (/can't be blocked|cannot be blocked|menace|flying|shadow|horsemanship/.test(text)) return "Evasão";
-  if (/mill \d|mills? \d|put the top .* cards? of .* library into .* graveyard/.test(text)) return "Mill";
-  if (/search your library/.test(text)) return "Tutor";
-  if (/counter target spell|counter target activated|counter target triggered|counter target ability/.test(text)) return "Counter";
-  if (/destroy all|exile all|each creature gets -\d|all creatures get -\d|destroy each/.test(text)) return "Limpeza de mesa";
-  if (/destroy target|exile target|deals? \d+ damage to target creature|target creature gets -\d/.test(text)) return "Remoção";
-  if (/return .* from your graveyard to the battlefield|put .* from .* graveyard onto the battlefield|reanimate/.test(text)) return "Reanimação";
-  if (/return .* from your graveyard to your hand|return target .* card from .* graveyard|return up to .* cards? from .* graveyard/.test(text)) return "Recursão";
-  if (/draw (a|one|two|three|four|five|\d+) cards?|draw cards equal|draw that many cards|draw an additional card/.test(text)) return "Compra";
-  if (/each opponent loses|target opponent loses|opponents lose|loses? \d+ life/.test(text)) return "Dreno";
-  if (/gain \d+ life|gains? life|lifelink/.test(text)) return "Ganho de vida";
-  if (/add \{[wubrgc]|add one mana|add two mana|add three mana|search your library for .* land card|put .* land card onto the battlefield/.test(text)) return "Ramp";
-  if (/hexproof|indestructible|protection from|phase out|regenerate|prevent all damage/.test(text)) return "Proteção";
-  if (/discard a card|discards? \d|target player discards|each opponent discards/.test(text)) return "Descarte";
-  if (/sacrifice a creature|sacrifice a permanent|sacrifice another|sacrifice an artifact|sacrifice it/.test(text)) return "Sacrifício";
-  if (/create .* token|creates? .* token|create a token/.test(text)) return "Tokens";
-  if (/exile .* you control.*return|exile target .* you control.*return|return that card to the battlefield|return it to the battlefield under its owner's control/.test(text)) return "Blink";
+  // No modo Categoria, terreno é SEMPRE Terrenos.
+  // Mesmo terrenos que geram muita mana, buscam terrenos ou têm habilidades de ramp
+  // não saem desta categoria.
+  if (typeLine.includes("land")) {
+    return "Terrenos";
+  }
 
-  // Quando não houver uma função clara no texto, usa o tipo principal
-  // como fallback para a carta não cair numa categoria genérica demais.
-  if (typeLine.includes("land")) return "Terrenos";
+  const scores = new Map<string, number>();
+
+  function addScore(category: string, score: number) {
+    scores.set(category, Math.max(scores.get(category) ?? 0, score));
+  }
+
+  // REMOÇÃO também engloba counters e limpezas de mesa.
+  if (
+    /counter target spell|counter target activated ability|counter target triggered ability|counter target ability|counter that spell/.test(
+      oracleText
+    )
+  ) {
+    addScore("Remoção", 110);
+  }
+
+  if (
+    /destroy all|exile all|destroy each|exile each|all creatures get -|each creature gets -|each creature gets \+?-[0-9x]/.test(
+      oracleText
+    )
+  ) {
+    addScore("Remoção", 108);
+  }
+
+  if (
+    /destroy target|exile target|target creature gets -|deals? .* damage to target creature|deals? .* damage to any target|return target .* to its owner's hand/.test(
+      oracleText
+    )
+  ) {
+    addScore("Remoção", 104);
+  }
+
+  // TUTOR.
+  if (
+    /search your library for .* card|search your library for a card|search your library, then shuffle/.test(
+      oracleText
+    )
+  ) {
+    addScore("Tutor", 96);
+  }
+
+  // RECURSÃO também engloba reanimação.
+  if (
+    /return .* from your graveyard to the battlefield|put .* from .* graveyard onto the battlefield|return target creature card from your graveyard to the battlefield|reanimate/.test(
+      oracleText
+    )
+  ) {
+    addScore("Recursão", 94);
+  }
+
+  if (
+    /return .* from your graveyard to your hand|return target .* card from .* graveyard|return up to .* cards? from .* graveyard|put target .* card from your graveyard into your hand/.test(
+      oracleText
+    )
+  ) {
+    addScore("Recursão", 92);
+  }
+
+  // COMPRA.
+  if (
+    /draw (a|one|two|three|four|five|six|seven|\d+) cards?|draw cards equal|draw that many cards|draw an additional card|draw a card|investigate/.test(
+      oracleText
+    )
+  ) {
+    addScore("Compra", 88);
+  }
+
+  // RAMP: somente não-terrenos.
+  if (
+    /add \{[wubrgc]|add one mana|add two mana|add three mana|add x mana|treasure token|search your library for .* land card|put .* land card onto the battlefield|additional land on each of your turns/.test(
+      oracleText
+    )
+  ) {
+    addScore("Ramp", 84);
+  }
+
+  // PROTEÇÃO também absorve blink defensivo.
+  if (
+    /gains? hexproof|gains? indestructible|protection from|phase out|phases out|regenerate|prevent all damage|can't be the target|cannot be the target/.test(
+      oracleText
+    )
+  ) {
+    addScore("Proteção", 80);
+  }
+
+  if (
+    /exile .* you control.*return|exile target .* you control.*return|return that card to the battlefield|return it to the battlefield under its owner's control|exile .* then return/.test(
+      oracleText
+    )
+  ) {
+    addScore("Proteção", 76);
+  }
+
+  // EVASÃO só quando a carta cria evasão de verdade.
+  // Flying, menace, deathtouch etc. escritos apenas como keyword da própria carta
+  // não bastam para classificá-la aqui.
+  if (
+    /can't be blocked|cannot be blocked|target creature gains? flying|target creature gains? menace|creatures you control gain flying|creatures you control gain menace|creatures you control can't be blocked|creatures you control cannot be blocked/.test(
+      oracleText
+    )
+  ) {
+    addScore("Evasão", 72);
+  }
+
+  // CÓPIA.
+  if (
+    /copy target|copy .* spell|copy .* ability|create a token that's a copy|create a token that is a copy|copy of|triggers an additional time|trigger an additional time/.test(
+      oracleText
+    )
+  ) {
+    addScore("Cópia", 70);
+  }
+
+  // ROUBO.
+  if (
+    /gain control of|control of target|you control enchanted|exchange control/.test(
+      oracleText
+    )
+  ) {
+    addScore("Roubo", 68);
+  }
+
+  // DRENO.
+  if (
+    /each opponent loses|target opponent loses|opponents lose|loses? \d+ life|loses? x life/.test(
+      oracleText
+    )
+  ) {
+    addScore("Dreno", 66);
+  }
+
+  // GANHO DE VIDA. Lifelink sozinho não força a categoria.
+  if (/gain \d+ life|gain life|gains? life/.test(oracleText)) {
+    addScore("Ganho de vida", 64);
+  }
+
+  // MILL.
+  if (
+    /mill \d|mills? \d|mill cards|put the top .* cards? of .* library into .* graveyard/.test(
+      oracleText
+    )
+  ) {
+    addScore("Mill", 62);
+  }
+
+  // INFECT / VENENO.
+  if (/poison counter|poison counters|poisoned|toxic \d|toxic x/.test(oracleText)) {
+    addScore("Infect", 60);
+  }
+
+  if (scores.size > 0) {
+    return [...scores.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  }
+
+  // Fallbacks no estilo Archidekt: se nenhuma função principal foi detectada,
+  // criaturas e instantâneas ainda ficam em grupos úteis em vez de virar tudo
+  // "Sem categoria".
   if (typeLine.includes("creature")) return "Criaturas";
-  if (typeLine.includes("artifact")) return "Artefatos";
-  if (typeLine.includes("enchantment")) return "Encantamentos";
-  if (typeLine.includes("planeswalker")) return "Planeswalkers";
   if (typeLine.includes("instant")) return "Instantâneas";
-  if (typeLine.includes("sorcery")) return "Feitiços";
 
-  return "Outros";
+  return "Sem categoria";
 }
 
 function getColorGroup(row: DeckCardRow) {
@@ -439,6 +614,33 @@ function getGroupOrder(rows: DeckCardRow[], organizeBy: OrganizeBy) {
   if (organizeBy === "Cor") {
     return colorGroupOrder.filter((groupName) =>
       rows.some((row) => getColorGroup(row) === groupName)
+    );
+  }
+
+  if (organizeBy === "Categoria") {
+    const categoryOrder = [
+      "Comandante",
+      "Cópia",
+      "Criaturas",
+      "Dreno",
+      "Compra",
+      "Evasão",
+      "Infect",
+      "Instantâneas",
+      "Terrenos",
+      "Ganho de vida",
+      "Mill",
+      "Proteção",
+      "Ramp",
+      "Recursão",
+      "Remoção",
+      "Roubo",
+      "Tutor",
+      "Sem categoria",
+    ];
+
+    return categoryOrder.filter((groupName) =>
+      rows.some((row) => getFunctionalCategory(row) === groupName)
     );
   }
 
@@ -614,7 +816,7 @@ export default function DeckPage() {
   const [organizeBy, setOrganizeBy] = useState<OrganizeBy>("Categoria");
   const [viewMode, setViewMode] = useState("Stack");
 
-  const [deckArt, setDeckArt] = useState("/hero-bg.jpg");
+  const deckArt = "/hero-bg.jpg";
 
   const [updateDeckOpen, setUpdateDeckOpen] = useState(false);
   const [importDeckOpen, setImportDeckOpen] = useState(false);
@@ -645,6 +847,8 @@ export default function DeckPage() {
           return;
         }
 
+        setPrintingOptions([]);
+        setPrintingError("");
         setSelectedCard(null);
       }
     }
@@ -707,6 +911,95 @@ export default function DeckPage() {
       .filter((group) => group.cards.length > 0);
   }, [visibleDeckCards, organizeBy]);
 
+  const cardNavigationOrder = useMemo(
+    () => deckCardsByType.flatMap((group) => group.cards),
+    [deckCardsByType]
+  );
+
+  const selectedCardNavigationIndex = useMemo(() => {
+    if (!selectedCard) return -1;
+
+    return cardNavigationOrder.findIndex((row) =>
+      row.id && selectedCard.id
+        ? row.id === selectedCard.id
+        : row.scryfall_id === selectedCard.scryfall_id &&
+          row.board === selectedCard.board
+    );
+  }, [cardNavigationOrder, selectedCard]);
+
+  const hasPreviousSelectedCard = selectedCardNavigationIndex > 0;
+  const hasNextSelectedCard =
+    selectedCardNavigationIndex >= 0 &&
+    selectedCardNavigationIndex < cardNavigationOrder.length - 1;
+
+  function navigateSelectedCard(direction: -1 | 1) {
+    if (selectedCardNavigationIndex < 0) return;
+
+    const nextIndex = selectedCardNavigationIndex + direction;
+
+    if (nextIndex < 0 || nextIndex >= cardNavigationOrder.length) {
+      return;
+    }
+
+    setPrintingPickerOpen(false);
+    setPrintingError("");
+    setSelectedCard(cardNavigationOrder[nextIndex]);
+  }
+
+  async function navigatePrintingCard(direction: -1 | 1) {
+    if (selectedCardNavigationIndex < 0 || changingPrinting) return;
+
+    const nextIndex = selectedCardNavigationIndex + direction;
+
+    if (nextIndex < 0 || nextIndex >= cardNavigationOrder.length) {
+      return;
+    }
+
+    const nextCard = cardNavigationOrder[nextIndex];
+
+    setPrintingError("");
+    setPrintingOptions([]);
+    setSelectedCard(nextCard);
+    await loadCardPrintings(nextCard);
+  }
+
+  useEffect(() => {
+    if (!selectedCard) return;
+
+    function handleCardNavigation(event: KeyboardEvent) {
+      if (event.key === "ArrowLeft" && hasPreviousSelectedCard) {
+        event.preventDefault();
+        if (printingPickerOpen) {
+          void navigatePrintingCard(-1);
+        } else {
+          navigateSelectedCard(-1);
+        }
+      }
+
+      if (event.key === "ArrowRight" && hasNextSelectedCard) {
+        event.preventDefault();
+        if (printingPickerOpen) {
+          void navigatePrintingCard(1);
+        } else {
+          navigateSelectedCard(1);
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleCardNavigation);
+
+    return () => {
+      window.removeEventListener("keydown", handleCardNavigation);
+    };
+  }, [
+    selectedCard,
+    printingPickerOpen,
+    hasPreviousSelectedCard,
+    hasNextSelectedCard,
+    selectedCardNavigationIndex,
+    cardNavigationOrder,
+  ]);
+
 
   async function loadDeckCards(deckId: string) {
     const { data, error } = await supabase
@@ -740,35 +1033,83 @@ export default function DeckPage() {
       )
       .in("scryfall_id", scryfallIds);
 
-    if (cardsError) {
-      console.error("Erro ao carregar dados das cartas:", cardsError);
-      setDeckCards(rows);
-      return;
-    }
-
     const cardsById = new Map<string, ResolvedCard>();
 
-    for (const card of cardData ?? []) {
-      cardsById.set(card.scryfall_id, {
-        id: card.scryfall_id,
-        oracle_id: card.oracle_id ?? undefined,
-        name: card.name,
-        type_line: card.type_line ?? undefined,
-        oracle_text: getOracleTextFromCardData(card.card_data),
-        colors: getColorsFromCardData(card.card_data),
-        color_identity: Array.isArray(card.color_identity)
-          ? card.color_identity.filter(
-              (color): color is string => typeof color === "string"
-            )
-          : [],
-        image_uris:
-          card.image_uri || card.image_uri_large
-            ? {
-                normal: card.image_uri ?? undefined,
-                large: card.image_uri_large ?? undefined,
-              }
-            : undefined,
-      });
+    if (cardsError) {
+      console.error("Erro ao carregar dados das cartas:", cardsError);
+    } else {
+      for (const card of cardData ?? []) {
+        cardsById.set(card.scryfall_id, {
+          id: card.scryfall_id,
+          oracle_id: card.oracle_id ?? undefined,
+          name: card.name,
+          type_line: card.type_line ?? undefined,
+          oracle_text: getOracleTextFromCardData(card.card_data),
+          raw_text: JSON.stringify(card.card_data ?? {}).toLocaleLowerCase(
+            "pt-BR"
+          ),
+          colors: getColorsFromCardData(card.card_data),
+          color_identity: Array.isArray(card.color_identity)
+            ? card.color_identity.filter(
+                (color): color is string => typeof color === "string"
+              )
+            : [],
+          image_uris:
+            card.image_uri || card.image_uri_large || getArtCropFromCardData(card.card_data)
+              ? {
+                  normal: card.image_uri ?? undefined,
+                  large: card.image_uri_large ?? undefined,
+                  art_crop: getArtCropFromCardData(card.card_data),
+                }
+              : undefined,
+        });
+      }
+    }
+
+    // Uma impressão escolhida no Scryfall pode não existir no nosso espelho
+    // do Supabase. Nesses casos, buscamos SOMENTE as impressões que faltam
+    // pela rota do Scryfall, preservando o scryfall_id exato escolhido.
+    const missingScryfallIds = scryfallIds.filter(
+      (scryfallId) => !cardsById.has(scryfallId)
+    );
+
+    if (missingScryfallIds.length > 0) {
+      try {
+        const response = await fetch("/api/scryfall/cards", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          cache: "no-store",
+          body: JSON.stringify({
+            identifiers: missingScryfallIds.map((id) => ({ id })),
+          }),
+        });
+
+        const result = (await response.json()) as {
+          cards?: ResolvedCard[];
+          error?: string;
+        };
+
+        if (!response.ok) {
+          console.error(
+            "Não foi possível buscar as impressões ausentes no Scryfall:",
+            result.error
+          );
+        } else {
+          for (const card of result.cards ?? []) {
+            cardsById.set(card.id, {
+              ...card,
+              raw_text: JSON.stringify(card).toLocaleLowerCase("pt-BR"),
+            });
+          }
+        }
+      } catch (fallbackError) {
+        console.error(
+          "Erro ao buscar impressões ausentes no Scryfall:",
+          fallbackError
+        );
+      }
     }
 
     setDeckCards(
@@ -908,57 +1249,6 @@ export default function DeckPage() {
     }
   }, [params.id, supabase]);
 
-  useEffect(() => {
-    async function loadRandomDeckArt() {
-      try {
-        const response = await fetch("/api/scryfall/commander", {
-          cache: "no-store",
-        });
-
-        if (!response.ok) return;
-
-        const result = (await response.json()) as {
-          prints?: {
-            image?: string;
-          }[];
-          commander?: {
-            image_uris?: {
-              large?: string;
-              normal?: string;
-            };
-            card_faces?: {
-              image_uris?: {
-                large?: string;
-                normal?: string;
-              };
-            }[];
-          };
-        };
-
-        const images = [
-          ...(result.prints ?? [])
-            .map((print) => print.image)
-            .filter((image): image is string => Boolean(image)),
-          result.commander?.image_uris?.large,
-          result.commander?.image_uris?.normal,
-          result.commander?.card_faces?.[0]?.image_uris?.large,
-          result.commander?.card_faces?.[0]?.image_uris?.normal,
-        ].filter((image): image is string => Boolean(image));
-
-        if (images.length === 0) return;
-
-        const randomImage =
-          images[Math.floor(Math.random() * images.length)];
-
-        setDeckArt(randomImage);
-      } catch {
-        // Em redes onde o Scryfall estiver bloqueado, usamos o hero local.
-      }
-    }
-
-    loadRandomDeckArt();
-  }, []);
-
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -1015,23 +1305,18 @@ export default function DeckPage() {
       };
 
       if (!response.ok) {
-        console.error(
-          result.error ?? "Não foi possível carregar as impressões."
-        );
         setPrintingError(
           result.error ?? "Não foi possível carregar as impressões."
         );
         return;
       }
 
-      const printings = [...(result.printings ?? [])].sort((a, b) =>
-        b.released_at.localeCompare(a.released_at)
-      );
-
-      setPrintingOptions(printings);
+      setPrintingOptions(result.printings ?? []);
     } catch (error) {
-      console.error("Erro ao buscar impressões no Scryfall:", error);
-      setPrintingError("Não foi possível carregar as impressões.");
+      console.error("Erro ao carregar impressões:", error);
+      setPrintingError(
+        "Não foi possível carregar as impressões desta carta."
+      );
     } finally {
       setPrintingLoading(false);
     }
@@ -1162,6 +1447,187 @@ export default function DeckPage() {
 
     await loadDeckCards(deck.id);
     setChangingPrinting(false);
+  }
+
+  async function setCardAsCommander(row: DeckCardRow) {
+    if (!deck || !isOwner || !row.id) return;
+
+    if (row.board === "commander") {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+
+    try {
+      // 1. Guarda o comandante atual, se existir.
+      const { data: currentCommanders, error: commanderError } = await supabase
+        .from("deck_cards")
+        .select("id, scryfall_id, oracle_id, quantity, board")
+        .eq("deck_id", deck.id)
+        .eq("board", "commander");
+
+      if (commanderError) {
+        console.error("Erro ao buscar comandante atual:", commanderError);
+        setErrorMessage("Não foi possível alterar o comandante.");
+        return;
+      }
+
+      // 2. O comandante antigo volta para o mainboard.
+      // Se a mesma impressão já estiver no mainboard, junta as quantidades.
+      for (const commander of currentCommanders ?? []) {
+        if (commander.id === row.id) continue;
+
+        const { data: sameMainboardCard, error: sameMainboardError } =
+          await supabase
+            .from("deck_cards")
+            .select("id, quantity")
+            .eq("deck_id", deck.id)
+            .eq("scryfall_id", commander.scryfall_id)
+            .eq("board", "mainboard")
+            .neq("id", commander.id)
+            .maybeSingle();
+
+        if (sameMainboardError) {
+          console.error(
+            "Erro ao verificar comandante no mainboard:",
+            sameMainboardError
+          );
+          setErrorMessage("Não foi possível alterar o comandante.");
+          return;
+        }
+
+        if (sameMainboardCard) {
+          const { error: mergeOldCommanderError } = await supabase
+            .from("deck_cards")
+            .update({
+              quantity:
+                sameMainboardCard.quantity + Math.max(1, commander.quantity ?? 1),
+            })
+            .eq("id", sameMainboardCard.id);
+
+          if (mergeOldCommanderError) {
+            console.error(
+              "Erro ao juntar o comandante antigo ao mainboard:",
+              mergeOldCommanderError
+            );
+            setErrorMessage("Não foi possível alterar o comandante.");
+            return;
+          }
+
+          const { error: deleteOldCommanderError } = await supabase
+            .from("deck_cards")
+            .delete()
+            .eq("id", commander.id);
+
+          if (deleteOldCommanderError) {
+            console.error(
+              "Erro ao remover a linha do comandante antigo:",
+              deleteOldCommanderError
+            );
+            setErrorMessage("Não foi possível alterar o comandante.");
+            return;
+          }
+        } else {
+          const { error: moveOldCommanderError } = await supabase
+            .from("deck_cards")
+            .update({ board: "mainboard" })
+            .eq("id", commander.id);
+
+          if (moveOldCommanderError) {
+            console.error(
+              "Erro ao devolver o comandante antigo ao mainboard:",
+              moveOldCommanderError
+            );
+            setErrorMessage("Não foi possível alterar o comandante.");
+            return;
+          }
+        }
+      }
+
+      // 3. Se a carta escolhida tinha mais de uma cópia, preserva as cópias
+      // extras no mainboard e usa somente uma como comandante.
+      const extraCopies = Math.max(0, row.quantity - 1);
+
+      const { error: setCommanderError } = await supabase
+        .from("deck_cards")
+        .update({
+          board: "commander",
+          quantity: 1,
+        })
+        .eq("id", row.id);
+
+      if (setCommanderError) {
+        console.error("Erro ao definir novo comandante:", setCommanderError);
+        setErrorMessage("Não foi possível definir esta carta como comandante.");
+        return;
+      }
+
+      if (extraCopies > 0) {
+        const { data: existingMainboardCopy, error: existingCopyError } =
+          await supabase
+            .from("deck_cards")
+            .select("id, quantity")
+            .eq("deck_id", deck.id)
+            .eq("scryfall_id", row.scryfall_id)
+            .eq("board", "mainboard")
+            .maybeSingle();
+
+        if (existingCopyError) {
+          console.error(
+            "Erro ao verificar cópias extras no mainboard:",
+            existingCopyError
+          );
+        } else if (existingMainboardCopy) {
+          await supabase
+            .from("deck_cards")
+            .update({
+              quantity: existingMainboardCopy.quantity + extraCopies,
+            })
+            .eq("id", existingMainboardCopy.id);
+        } else {
+          await supabase.from("deck_cards").insert({
+            deck_id: deck.id,
+            scryfall_id: row.scryfall_id,
+            oracle_id: row.oracle_id ?? row.card?.oracle_id ?? null,
+            quantity: extraCopies,
+            board: "mainboard",
+          });
+        }
+      }
+
+      // 4. Atualiza também o comandante salvo na tabela decks.
+      const { error: updateDeckError } = await supabase
+        .from("decks")
+        .update({
+          commander_scryfall_id: row.scryfall_id,
+          updated_at: updatedAt,
+        })
+        .eq("id", deck.id)
+        .eq("owner_id", deck.owner_id);
+
+      if (updateDeckError) {
+        console.error("Erro ao atualizar comandante do deck:", updateDeckError);
+        setErrorMessage("A carta mudou de posição, mas o deck não foi atualizado.");
+      }
+
+      setDeck({
+        ...deck,
+        commander_scryfall_id: row.scryfall_id,
+        updated_at: updatedAt,
+      });
+
+      setSelectedCard({
+        ...row,
+        board: "commander",
+        quantity: 1,
+      });
+      setSelectedCardQuantity("1");
+
+      await loadDeckCards(deck.id);
+    } catch (error) {
+      console.error("Erro inesperado ao definir comandante:", error);
+      setErrorMessage("Não foi possível definir esta carta como comandante.");
+    }
   }
 
   async function setCardQuantity(
@@ -1623,17 +2089,45 @@ export default function DeckPage() {
 
         <header className="relative mt-10 overflow-visible border-b border-white/10 pb-16">
           {!editing && (
-            <>
+            <div className="pointer-events-none absolute -top-28 bottom-0 left-0 right-0 overflow-hidden">
               <div
-                className="pointer-events-none absolute inset-0 bg-cover bg-center opacity-[0.22]"
+                className="
+                  absolute
+                  -right-8 top-1/2
+                  h-[190%] w-[68%]
+                  -translate-y-1/2
+                  bg-contain bg-right bg-no-repeat
+                  opacity-[0.34]
+                "
                 style={{
                   backgroundImage: `url("${deckArt}")`,
+                  WebkitMaskImage:
+                    "linear-gradient(to left, black 0%, black 38%, rgba(0,0,0,.78) 60%, rgba(0,0,0,.35) 82%, transparent 100%)",
+                  maskImage:
+                    "linear-gradient(to left, black 0%, black 38%, rgba(0,0,0,.78) 60%, rgba(0,0,0,.35) 82%, transparent 100%)",
                 }}
               />
 
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#0b0b0d]/70 via-[#0b0b0d]/88 to-[#0b0b0d]" />
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#0b0b0d] via-transparent to-[#0b0b0d]/60" />
-            </>
+              <div
+                className="
+                  absolute inset-0
+                  bg-gradient-to-l
+                  from-[#0b0b0d]/20
+                  via-[#0b0b0d]/58
+                  to-[#0b0b0d]
+                "
+              />
+
+              <div
+                className="
+                  absolute inset-0
+                  bg-gradient-to-t
+                  from-[#0b0b0d]
+                  via-transparent
+                  to-[#0b0b0d]/65
+                "
+              />
+            </div>
           )}
 
           <div className="relative z-10">
@@ -2368,17 +2862,21 @@ export default function DeckPage() {
   2xl:[zoom:0.95]
 "
                     >
-                      <div className="flex min-w-max items-start justify-start gap-2 px-1 pt-1">
+                      <div
+                        className={
+                          organizeBy === "Categoria"
+                            ? "w-full px-1 pt-1 [column-gap:0.5rem] [column-width:215px] lg:[column-width:225px] xl:[column-width:240px] 2xl:[column-width:255px]"
+                            : "flex min-w-max items-start justify-start gap-2 px-1 pt-1"
+                        }
+                      >
                         {deckCardsByType.map((group) => (
                           <section
                             key={group.name}
-                            className="
-                              w-[215px]
-                              shrink-0
-                              lg:w-[225px]
-                              xl:w-[240px]
-                              2xl:w-[255px]
-                            "
+                            className={
+                              organizeBy === "Categoria"
+                                ? "mb-10 inline-block w-full break-inside-avoid align-top"
+                                : "w-[215px] shrink-0 lg:w-[225px] xl:w-[240px] 2xl:w-[255px]"
+                            }
                           >
                             <div className="mb-3 border-b border-white/10 pb-2">
                               <div className="flex items-center justify-between gap-3">
@@ -2392,14 +2890,35 @@ export default function DeckPage() {
                               </div>
                             </div>
 
-                            <div className="relative min-h-[460px]">
+                            <div
+                              className={
+                                organizeBy === "Categoria"
+                                  ? "relative"
+                                  : "relative min-h-[460px]"
+                              }
+                              style={
+                                organizeBy === "Categoria"
+                                  ? {
+                                      minHeight: `${Math.max(
+                                        332,
+                                        332 + Math.max(0, group.cards.length - 1) * 112
+                                      )}px`,
+                                    }
+                                  : undefined
+                              }
+                            >
                               {group.cards.map((row, index) => {
                                 const image = getProxiedCardImage(row.card);
 
                                 return (
                                   <div
                                     key={`${row.scryfall_id}-${row.board}`}
-                                    onClick={() => setSelectedCard(row)}
+                                    onClick={() => {
+                                      setPrintingPickerOpen(false);
+                                      setPrintingOptions([]);
+                                      setPrintingError("");
+                                      setSelectedCard(row);
+                                    }}
                                     className="
                                       group/card
                                       relative
@@ -2539,6 +3058,9 @@ export default function DeckPage() {
                                           aria-label="Mais opções da carta"
                                           onClick={(event) => {
                                             event.stopPropagation();
+                                            setPrintingPickerOpen(false);
+                                            setPrintingOptions([]);
+                                            setPrintingError("");
                                             setSelectedCard(row);
                                           }}
                                           className="
@@ -2591,14 +3113,89 @@ export default function DeckPage() {
     "
     onMouseDown={(event) => {
       if (event.target === event.currentTarget) {
+        setPrintingPickerOpen(false);
+        setPrintingOptions([]);
+        setPrintingError("");
         setSelectedCard(null);
       }
     }}
   >
+    <button
+      type="button"
+      aria-label="Carta anterior"
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={() => {
+        if (printingPickerOpen) {
+          void navigatePrintingCard(-1);
+        } else {
+          navigateSelectedCard(-1);
+        }
+      }}
+      disabled={!hasPreviousSelectedCard || changingPrinting}
+      className="
+        absolute left-1 top-1/2 z-20
+        flex h-10 w-10 -translate-y-1/2 items-center justify-center
+        rounded-full
+        border border-white/10
+        bg-black/70
+        text-3xl font-light text-white/70
+        shadow-xl shadow-black/30
+        backdrop-blur-md
+        transition
+        hover:border-white/25
+        hover:bg-black/90
+        hover:text-white
+        disabled:cursor-default
+        disabled:opacity-20
+        disabled:hover:border-white/10
+        disabled:hover:bg-black/70
+        disabled:hover:text-white/70
+        lg:left-3
+      "
+    >
+      ‹
+    </button>
+
+    <button
+      type="button"
+      aria-label="Próxima carta"
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={() => {
+        if (printingPickerOpen) {
+          void navigatePrintingCard(1);
+        } else {
+          navigateSelectedCard(1);
+        }
+      }}
+      disabled={!hasNextSelectedCard || changingPrinting}
+      className="
+        absolute right-1 top-1/2 z-20
+        flex h-10 w-10 -translate-y-1/2 items-center justify-center
+        rounded-full
+        border border-white/10
+        bg-black/70
+        text-3xl font-light text-white/70
+        shadow-xl shadow-black/30
+        backdrop-blur-md
+        transition
+        hover:border-white/25
+        hover:bg-black/90
+        hover:text-white
+        disabled:cursor-default
+        disabled:opacity-20
+        disabled:hover:border-white/10
+        disabled:hover:bg-black/70
+        disabled:hover:text-white/70
+        lg:right-3
+      "
+    >
+      ›
+    </button>
+
     <div
       className="
         relative
-        w-full max-w-6xl
+        w-full max-w-5xl
         overflow-hidden
         rounded-[24px]
         border border-white/10
@@ -2620,7 +3217,12 @@ export default function DeckPage() {
 
         <button
           type="button"
-          onClick={() => setSelectedCard(null)}
+          onClick={() => {
+            setPrintingPickerOpen(false);
+            setPrintingOptions([]);
+            setPrintingError("");
+            setSelectedCard(null);
+          }}
           className="
             flex h-9 w-9 items-center justify-center
             rounded-xl
@@ -2729,27 +3331,53 @@ export default function DeckPage() {
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              setPrintingPickerOpen(true);
-              void loadCardPrintings(selectedCard);
-            }}
-            className="
-              mt-5
-              rounded-xl
-              border border-white/10
-              px-5 py-2.5
-              text-xs font-medium
-              text-white/50
-              transition
-              hover:border-white/20
-              hover:bg-white/5
-              hover:text-white
-            "
-          >
-            Trocar impressão
-          </button>
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setPrintingPickerOpen(true);
+                void loadCardPrintings(selectedCard);
+              }}
+              className="
+                rounded-xl
+                border border-white/10
+                px-5 py-2.5
+                text-xs font-medium
+                text-white/50
+                transition
+                hover:border-white/20
+                hover:bg-white/5
+                hover:text-white
+              "
+            >
+              Trocar impressão
+            </button>
+
+            {isOwner && (
+              <button
+                type="button"
+                disabled={selectedCard.board === "commander"}
+                onClick={() => {
+                  void setCardAsCommander(selectedCard);
+                }}
+                className={`
+                  rounded-xl
+                  border px-5 py-2.5
+                  text-xs font-medium
+                  transition
+                  ${
+                    selectedCard.board === "commander"
+                      ? "cursor-default border-white/10 bg-white/[0.04] text-white/30"
+                      : "border-white/10 text-white/50 hover:border-white/20 hover:bg-white/5 hover:text-white"
+                  }
+                `}
+              >
+                {selectedCard.board === "commander"
+                  ? "Já é o comandante"
+                  : "Definir como comandante"}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* LADO DIREITO */}
@@ -2938,7 +3566,7 @@ export default function DeckPage() {
             </button>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-8">
+          <div className="min-h-0 flex-1 overflow-y-auto px-12 py-8">
             {printingLoading ? (
               <div className="flex min-h-[350px] items-center justify-center text-sm text-white/35">
                 Carregando impressões...
