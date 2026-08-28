@@ -2336,8 +2336,7 @@ export default function DeckPage() {
       // 3. Se a carta escolhida tinha mais de uma cópia, preserva as cópias
       // extras na board de origem e usa somente uma como comandante.
       const extraCopies = Math.max(0, row.quantity - 1);
-      const extraCopiesBoard: ImportBoard =
-        row.board === "commander" ? "mainboard" : row.board;
+      const extraCopiesBoard: ImportBoard = row.board;
 
       const { error: setCommanderError } = await supabase
         .from("deck_cards")
