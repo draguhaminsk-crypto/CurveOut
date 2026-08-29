@@ -13,12 +13,22 @@ import { useRouter } from "next/navigation";
 import { createClient } from "../../lib/supabase/client";
 
 type Profile = {
+  id: string;
   nickname: string;
   bio: string | null;
   avatar_url: string | null;
   favorite_card_oracle_id: string | null;
   favorite_card_printing_id: string | null;
 };
+
+type SocialProfile = {
+  id: string;
+  nickname: string;
+  avatar_url: string | null;
+  bio: string | null;
+};
+
+type SocialModalMode = "followers" | "following";
 
 type ScryfallImageUris = {
   small?: string;
@@ -51,6 +61,15 @@ export default function ProfilePage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+
+  const [followerCount, setFollowerCount] = useState(0);
+  const [followingCount, setFollowingCount] = useState(0);
+  const [socialModal, setSocialModal] =
+    useState<SocialModalMode | null>(null);
+  const [socialProfiles, setSocialProfiles] = useState<SocialProfile[]>([]);
+  const [socialLoading, setSocialLoading] = useState(false);
+  const [socialError, setSocialError] = useState("");
 
   const [bio, setBio] = useState("");
   const [editingBio, setEditingBio] = useState(false);
@@ -82,7 +101,7 @@ export default function ProfilePage() {
       const { data, error } = await supabase
         .from("profiles")
         .select(
-          "nickname, bio, avatar_url, favorite_card_oracle_id, favorite_card_printing_id"
+          "id, nickname, bio, avatar_url, favorite_card_oracle_id, favorite_card_printing_id"
         )
         .eq("id", user.id)
         .maybeSingle();
@@ -94,8 +113,41 @@ export default function ProfilePage() {
       }
 
       if (data) {
-        setProfile(data);
+        setUserId(user.id);
+        setProfile(data as Profile);
         setBio(data.bio ?? "");
+
+        const [
+          { count: followersTotal, error: followersError },
+          { count: followingTotal, error: followingError },
+        ] = await Promise.all([
+          supabase
+            .from("profile_follows")
+            .select("follower_id", { count: "exact", head: true })
+            .eq("following_id", user.id),
+          supabase
+            .from("profile_follows")
+            .select("following_id", { count: "exact", head: true })
+            .eq("follower_id", user.id),
+        ]);
+
+        if (followersError) {
+          console.warn(
+            "Não foi possível carregar seguidores:",
+            followersError.message
+          );
+        } else {
+          setFollowerCount(followersTotal ?? 0);
+        }
+
+        if (followingError) {
+          console.warn(
+            "Não foi possível carregar quem você segue:",
+            followingError.message
+          );
+        } else {
+          setFollowingCount(followingTotal ?? 0);
+        }
       }
 
       setLoading(false);
@@ -163,6 +215,77 @@ export default function ProfilePage() {
       cancelled = true;
     };
   }, [profile?.favorite_card_printing_id]);
+
+  async function openSocialModal(mode: SocialModalMode) {
+    if (!userId || socialLoading) return;
+
+    setSocialModal(mode);
+    setSocialProfiles([]);
+    setSocialError("");
+    setSocialLoading(true);
+
+    try {
+      const idColumn =
+        mode === "followers" ? "follower_id" : "following_id";
+      const filterColumn =
+        mode === "followers" ? "following_id" : "follower_id";
+
+      const { data: followRows, error: followError } = await supabase
+        .from("profile_follows")
+        .select(idColumn)
+        .eq(filterColumn, userId)
+        .order("created_at", { ascending: false });
+
+      if (followError) {
+        throw followError;
+      }
+
+      const ids = Array.from(
+        new Set(
+          (followRows ?? [])
+            .map((row) => {
+              const value = row as Record<string, unknown>;
+              return typeof value[idColumn] === "string"
+                ? (value[idColumn] as string)
+                : null;
+            })
+            .filter((value): value is string => Boolean(value))
+        )
+      );
+
+      if (ids.length === 0) {
+        setSocialProfiles([]);
+        return;
+      }
+
+      const { data: profileRows, error: profilesError } = await supabase
+        .from("profiles")
+        .select("id, nickname, avatar_url, bio")
+        .in("id", ids);
+
+      if (profilesError) {
+        throw profilesError;
+      }
+
+      const profilesById = new Map(
+        ((profileRows ?? []) as SocialProfile[]).map((item) => [
+          item.id,
+          item,
+        ])
+      );
+
+      setSocialProfiles(
+        ids
+          .map((id) => profilesById.get(id))
+          .filter((item): item is SocialProfile => Boolean(item))
+      );
+    } catch (error) {
+      console.error("Erro ao carregar conexões do perfil:", error);
+      setSocialError("Não foi possível carregar esta lista.");
+    } finally {
+      setSocialLoading(false);
+    }
+  }
 
   async function saveBio() {
     if (!profile) return;
@@ -525,6 +648,40 @@ export default function ProfilePage() {
                 </div>
               )}
 
+              <div className="mt-6 flex flex-wrap items-center gap-5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void openSocialModal("followers");
+                  }}
+                  className="group flex items-baseline gap-1.5 text-sm transition"
+                >
+                  <span className="font-semibold text-[#f4f1e8]">
+                    {followerCount}
+                  </span>
+                  <span className="text-white/35 transition group-hover:text-white/60">
+                    {followerCount === 1 ? "seguidor" : "seguidores"}
+                  </span>
+                </button>
+
+                <span className="h-3 w-px bg-white/10" />
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    void openSocialModal("following");
+                  }}
+                  className="group flex items-baseline gap-1.5 text-sm transition"
+                >
+                  <span className="font-semibold text-[#f4f1e8]">
+                    {followingCount}
+                  </span>
+                  <span className="text-white/35 transition group-hover:text-white/60">
+                    seguindo
+                  </span>
+                </button>
+              </div>
+
               {message && (
                 <p className="mt-4 text-sm text-white/45">
                   {message}
@@ -532,22 +689,55 @@ export default function ProfilePage() {
               )}
             </div>
 
-            {/* CONFIGURAÇÕES */}
-            <Link
-              href="/configuracoes"
-              className="
-                self-start
-                rounded-lg
-                border border-white/15
-                px-5 py-2.5
-                text-sm text-white/60
-                transition
-                hover:border-white/30
-                hover:text-white
-              "
-            >
-              Editar perfil
-            </Link>
+            {/* AÇÕES DO PERFIL */}
+            <div className="flex shrink-0 flex-wrap gap-2 self-start">
+              <Link
+                href="/usuarios"
+                className="
+                  rounded-lg
+                  border border-[#c8b27a]/20
+                  bg-[#c8b27a]/[0.035]
+                  px-4 py-2.5
+                  text-sm text-[#e6d8b6]/60
+                  transition
+                  hover:border-[#c8b27a]/40
+                  hover:bg-[#c8b27a]/[0.07]
+                  hover:text-[#f4e7c5]
+                "
+              >
+                Encontrar pessoas
+              </Link>
+
+              <Link
+                href={`/perfil/${encodeURIComponent(profile.nickname)}`}
+                className="
+                  rounded-lg
+                  border border-white/10
+                  px-4 py-2.5
+                  text-sm text-white/40
+                  transition
+                  hover:border-white/25
+                  hover:text-white/70
+                "
+              >
+                Ver perfil público
+              </Link>
+
+              <Link
+                href="/configuracoes"
+                className="
+                  rounded-lg
+                  border border-white/15
+                  px-5 py-2.5
+                  text-sm text-white/60
+                  transition
+                  hover:border-white/30
+                  hover:text-white
+                "
+              >
+                Editar perfil
+              </Link>
+            </div>
           </div>
         </section>
 
@@ -693,10 +883,16 @@ export default function ProfilePage() {
 
                       <p className="mt-4 text-sm uppercase tracking-[0.12em] text-white/35">
                         {favoriteCard.set_name}
-                        <span className="mx-2 text-[#c8b27a]/30">//</span>
+                        <span className="mx-2 text-[#c8b27a]/30">{"//"}</span>
                         {favoriteCard.set.toUpperCase()}
-                        <span className="mx-2 text-[#c8b27a]/30">//</span>
+                        <span className="mx-2 text-[#c8b27a]/30">{"//"}</span>
                         #{favoriteCard.collector_number}
+                      </p>
+
+                      <p className="mx-auto mt-7 max-w-xl leading-7 text-white/42 md:mx-0">
+                        A carta que melhor representa seu perfil dentro do
+                        CurveOut. Uma escolha pessoal, não necessariamente a
+                        mais forte do deck.
                       </p>
 
                       <div className="mt-8 flex flex-wrap justify-center gap-3 md:justify-start">
@@ -850,6 +1046,90 @@ export default function ProfilePage() {
           </div>
         </section>
       </div>
+
+      {socialModal && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setSocialModal(null);
+            }
+          }}
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-white/12 bg-[#101013] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.18em] text-white/25">
+                  @{profile.nickname}
+                </p>
+                <h2 className="mt-1 text-lg font-semibold">
+                  {socialModal === "followers" ? "Seguidores" : "Seguindo"}
+                </h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSocialModal(null)}
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 text-white/35 transition hover:border-white/20 hover:text-white"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="max-h-[60vh] overflow-y-auto p-3">
+              {socialLoading ? (
+                <p className="px-3 py-8 text-center text-sm text-white/30">
+                  Carregando...
+                </p>
+              ) : socialError ? (
+                <p className="px-3 py-8 text-center text-sm text-red-100/55">
+                  {socialError}
+                </p>
+              ) : socialProfiles.length === 0 ? (
+                <p className="px-3 py-8 text-center text-sm text-white/30">
+                  {socialModal === "followers"
+                    ? "Ainda não há seguidores."
+                    : "Você ainda não segue ninguém."}
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {socialProfiles.map((item) => (
+                    <Link
+                      key={item.id}
+                      href={`/perfil/${encodeURIComponent(item.nickname)}`}
+                      onClick={() => setSocialModal(null)}
+                      className="flex items-center gap-3 rounded-xl px-3 py-3 transition hover:bg-white/[0.045]"
+                    >
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/[0.04] text-sm font-semibold">
+                        {item.avatar_url ? (
+                          <img
+                            src={item.avatar_url}
+                            alt={`Foto de @${item.nickname}`}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          item.nickname.charAt(0).toUpperCase()
+                        )}
+                      </div>
+
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-white/75">
+                          @{item.nickname}
+                        </p>
+                        {item.bio && (
+                          <p className="mt-0.5 truncate text-xs text-white/25">
+                            {item.bio}
+                          </p>
+                        )}
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

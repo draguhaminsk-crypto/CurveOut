@@ -46,6 +46,8 @@ type ScryfallCard = {
   set?: string;
   set_name?: string;
   collector_number?: string;
+  lang?: string;
+  released_at?: string;
   image_uris?: ScryfallImageUris;
   card_faces?: ScryfallCardFace[];
 };
@@ -173,28 +175,15 @@ export default function NovoDeckPage() {
   }, [router, supabase]);
 
   useEffect(() => {
-    if (format === "Commander") return;
-
-    setCommanderSearch("");
-    setCommanderResults([]);
-    setSelectedCommander(null);
-    setCommanderError("");
-  }, [format]);
-
-  useEffect(() => {
     if (format !== "Commander") return;
 
     const query = commanderSearch.trim();
 
     if (query.length < 2) {
-      setCommanderResults([]);
-      setCommanderLoading(false);
-      setCommanderError("");
       return;
     }
 
     if (selectedCommander && query === selectedCommander.name) {
-      setCommanderResults([]);
       return;
     }
 
@@ -310,13 +299,77 @@ export default function NovoDeckPage() {
       return;
     }
 
+    if (format === "Commander" && selectedCommander) {
+      const commanderImage =
+        selectedCommander.image_uris?.normal ??
+        selectedCommander.card_faces?.find(
+          (face) => face.image_uris?.normal
+        )?.image_uris?.normal ??
+        null;
+
+      const commanderImageLarge =
+        selectedCommander.image_uris?.large ??
+        selectedCommander.card_faces?.find(
+          (face) => face.image_uris?.large
+        )?.image_uris?.large ??
+        commanderImage;
+
+      const printingData = {
+        scryfall_id: selectedCommander.id,
+        oracle_id: selectedCommander.oracle_id ?? null,
+        name: selectedCommander.name,
+        type_line: selectedCommander.type_line ?? null,
+        image_uri: commanderImage,
+        image_uri_large: commanderImageLarge,
+        set: selectedCommander.set ?? "",
+        set_name: selectedCommander.set_name ?? "",
+        collector_number: selectedCommander.collector_number ?? "",
+        lang: selectedCommander.lang ?? "en",
+        released_at: selectedCommander.released_at ?? "",
+      };
+
+      const { error: commanderInsertError } = await supabase
+        .from("deck_cards")
+        .insert({
+          deck_id: data.id,
+          scryfall_id: selectedCommander.id,
+          oracle_id: selectedCommander.oracle_id ?? null,
+          quantity: 1,
+          board: "commander",
+          manual_category: null,
+          printing_data: printingData,
+        });
+
+      if (commanderInsertError) {
+        console.error(
+          "Erro ao adicionar comandante ao deck:",
+          commanderInsertError
+        );
+
+        // Se o comandante não puder ser gravado, desfaz a criação para
+        // não deixar um deck Commander incompleto perdido em Meus decks.
+        await supabase
+          .from("decks")
+          .delete()
+          .eq("id", data.id)
+          .eq("owner_id", user.id);
+
+        setErrorMessage(
+          `Não foi possível definir o comandante: ${commanderInsertError.message}`
+        );
+        setCreating(false);
+        return;
+      }
+    }
+
     /*
-      Por enquanto a área de importação só interpreta e conta a lista.
-      No próximo passo vamos usar deck_cards para resolver essas cartas
-      no Scryfall e gravá-las automaticamente no deck recém-criado.
+      A área de importação ainda só interpreta e conta a lista.
+      O comandante escolhido, porém, já é salvo imediatamente em
+      deck_cards como board "commander".
     */
 
     router.push(`/decks/${data.id}`);
+    router.refresh();
   }
 
   if (checkingUser) {
@@ -390,7 +443,19 @@ export default function NovoDeckPage() {
             <select
               id="deck-format"
               value={format}
-              onChange={(event) => setFormat(event.target.value)}
+              onChange={(event) => {
+                const nextFormat = event.target.value;
+
+                setFormat(nextFormat);
+
+                if (nextFormat !== "Commander") {
+                  setCommanderSearch("");
+                  setCommanderResults([]);
+                  setSelectedCommander(null);
+                  setCommanderLoading(false);
+                  setCommanderError("");
+                }
+              }}
               className="mt-3 w-full rounded-xl border border-white/10 bg-[#111114] px-4 py-3.5 text-[#f4f1e8] outline-none transition focus:border-white/30"
             >
               {formats.map((deckFormat) => (
@@ -437,6 +502,12 @@ export default function NovoDeckPage() {
                   onChange={(event) => {
                     const value = event.target.value;
                     setCommanderSearch(value);
+
+                    if (value.trim().length < 2) {
+                      setCommanderResults([]);
+                      setCommanderLoading(false);
+                      setCommanderError("");
+                    }
 
                     if (
                       selectedCommander &&

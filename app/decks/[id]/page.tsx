@@ -13,7 +13,11 @@ type Deck = {
   is_public: boolean;
   description: string | null;
   tags?: string[];
+  custom_categories?: string[];
   commander_scryfall_id: string | null;
+  parent_deck_id?: string | null;
+  root_deck_id?: string | null;
+  version_number?: number;
   created_at: string;
   updated_at: string;
 };
@@ -253,8 +257,11 @@ type DeckCardRow = {
   oracle_id: string | null;
   quantity: number;
   board: ImportBoard;
+  manual_category?: string | null;
+  printing_data?: CardPrinting | null;
   created_at?: string;
   card?: ResolvedCard;
+  pending?: boolean;
 };
 
 const updateDeckSectionOrder = [
@@ -304,6 +311,117 @@ type CardPrinting = {
   lang: string;
   released_at: string;
 };
+
+function applyPrintingSnapshot(
+  baseCard: ResolvedCard | undefined,
+  printing: CardPrinting
+): ResolvedCard {
+  const hasPrintingImage = Boolean(
+    printing.image_uri || printing.image_uri_large
+  );
+
+  return {
+    ...(baseCard ?? {
+      id: printing.scryfall_id,
+      name: printing.name,
+    }),
+    id: printing.scryfall_id,
+    oracle_id: printing.oracle_id ?? baseCard?.oracle_id,
+    name: printing.name || baseCard?.name || "Carta",
+    type_line: printing.type_line ?? baseCard?.type_line,
+    set: printing.set,
+    set_name: printing.set_name,
+    collector_number: printing.collector_number,
+    lang: printing.lang,
+    released_at: printing.released_at,
+    printing_source: "exact",
+    image_uris: hasPrintingImage
+      ? {
+          ...baseCard?.image_uris,
+          normal: printing.image_uri ?? undefined,
+          large: printing.image_uri_large ?? undefined,
+        }
+      : baseCard?.image_uris,
+  };
+}
+
+type LocalCardSearchRow = {
+  scryfall_id: string;
+  oracle_id: string | null;
+  name: string;
+  type_line: string | null;
+  color_identity: unknown;
+  card_data: unknown;
+  image_uri: string | null;
+  image_uri_large: string | null;
+};
+
+type DeckVersionSummary = {
+  id: string;
+  name: string;
+  parent_deck_id: string | null;
+  root_deck_id: string | null;
+  version_number: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type UndoAction = {
+  label: string;
+  run: () => Promise<void>;
+};
+
+type VersionDiffLine = {
+  name: string;
+  quantity: number;
+  board: ImportBoard;
+};
+
+type VersionDiff = {
+  fromDeckId: string;
+  fromDeckName: string;
+  added: VersionDiffLine[];
+  removed: VersionDiffLine[];
+};
+
+const RESERVED_CATEGORY_NAMES = new Set([
+  "comandante",
+  "sem categoria",
+]);
+
+
+function resolveLocalCard(row: LocalCardSearchRow): ResolvedCard {
+  return {
+    id: row.scryfall_id,
+    oracle_id: row.oracle_id ?? undefined,
+    name: row.name,
+    type_line: row.type_line ?? undefined,
+    oracle_text: getOracleTextFromCardData(row.card_data),
+    raw_text: JSON.stringify(row.card_data ?? {}).toLocaleLowerCase("pt-BR"),
+    colors: getColorsFromCardData(row.card_data),
+    cmc: getCmcFromCardData(row.card_data),
+    mana_cost: getManaCostFromCardData(row.card_data),
+    produced_mana: getProducedManaFromCardData(row.card_data),
+    ...getPrintingDataFromCardData(row.card_data),
+    printing_source: "exact",
+    prices: getPricesFromCardData(row.card_data),
+    color_identity: Array.isArray(row.color_identity)
+      ? row.color_identity.filter(
+          (color): color is string => typeof color === "string"
+        )
+      : [],
+    image_uris:
+      row.image_uri ||
+      row.image_uri_large ||
+      getArtCropFromCardData(row.card_data)
+        ? {
+            normal: row.image_uri ?? undefined,
+            large: row.image_uri_large ?? undefined,
+            art_crop: getArtCropFromCardData(row.card_data),
+          }
+        : undefined,
+  };
+}
 
 type CardTypeGroup =
   | "Comandante"
@@ -360,6 +478,54 @@ function normalizeColors(colors?: string[] | null) {
   return [...(colors ?? [])]
     .filter((color) => colorOrder.includes(color))
     .sort((a, b) => colorOrder.indexOf(a) - colorOrder.indexOf(b));
+}
+
+function getColorIdentityName(colors?: string[] | null) {
+  const normalized = normalizeColors(colors);
+  const key = normalized.join("");
+
+  const names: Record<string, string> = {
+    "": "Incolor",
+
+    W: "Mono Branco",
+    U: "Mono Azul",
+    B: "Mono Preto",
+    R: "Mono Vermelho",
+    G: "Mono Verde",
+
+    WU: "Azorius",
+    UB: "Dimir",
+    BR: "Rakdos",
+    RG: "Gruul",
+    WG: "Selesnya",
+    WB: "Orzhov",
+    UR: "Izzet",
+    BG: "Golgari",
+    WR: "Boros",
+    UG: "Simic",
+
+    WUG: "Bant",
+    WUB: "Esper",
+    UBR: "Grixis",
+    BRG: "Jund",
+    WRG: "Naya",
+
+    WBG: "Abzan",
+    WUR: "Jeskai",
+    UBG: "Sultai",
+    WBR: "Mardu",
+    URG: "Temur",
+
+    WUBR: "Yore-Tiller",
+    WUBG: "Witch-Maw",
+    WURG: "Ink-Treader",
+    WBRG: "Dune-Brood",
+    UBRG: "Glint-Eye",
+
+    WUBRG: "Cinco cores",
+  };
+
+  return names[key] ?? "Multicolorido";
 }
 
 function getColorsFromCardData(cardData: unknown): string[] {
@@ -573,179 +739,12 @@ function getCardTypeGroup(row: DeckCardRow): CardTypeGroup {
   return "Outros";
 }
 
-function getFunctionalCategory(row: DeckCardRow) {
-  if (row.board === "commander") return "Comandante";
-
-  const typeLine = row.card?.type_line?.toLocaleLowerCase("pt-BR") ?? "";
-  const oracleText = row.card?.oracle_text?.toLocaleLowerCase("pt-BR") ?? "";
-
-  // No modo Categoria, terreno é SEMPRE Terrenos.
-  // Mesmo terrenos que geram muita mana, buscam terrenos ou têm habilidades de ramp
-  // não saem desta categoria.
-  if (typeLine.includes("land")) {
-    return "Terrenos";
+function getManualCategory(row: DeckCardRow) {
+  if (row.board === "commander") {
+    return "Comandante";
   }
 
-  const scores = new Map<string, number>();
-
-  function addScore(category: string, score: number) {
-    scores.set(category, Math.max(scores.get(category) ?? 0, score));
-  }
-
-  // REMOÇÃO também engloba counters e limpezas de mesa.
-  if (
-    /counter target spell|counter target activated ability|counter target triggered ability|counter target ability|counter that spell/.test(
-      oracleText
-    )
-  ) {
-    addScore("Remoção", 110);
-  }
-
-  if (
-    /destroy all|exile all|destroy each|exile each|all creatures get -|each creature gets -|each creature gets \+?-[0-9x]/.test(
-      oracleText
-    )
-  ) {
-    addScore("Remoção", 108);
-  }
-
-  if (
-    /destroy target|exile target|target creature gets -|deals? .* damage to target creature|deals? .* damage to any target|return target .* to its owner's hand/.test(
-      oracleText
-    )
-  ) {
-    addScore("Remoção", 104);
-  }
-
-  // TUTOR.
-  if (
-    /search your library for .* card|search your library for a card|search your library, then shuffle/.test(
-      oracleText
-    )
-  ) {
-    addScore("Tutor", 96);
-  }
-
-  // RECURSÃO também engloba reanimação.
-  if (
-    /return .* from your graveyard to the battlefield|put .* from .* graveyard onto the battlefield|return target creature card from your graveyard to the battlefield|reanimate/.test(
-      oracleText
-    )
-  ) {
-    addScore("Recursão", 94);
-  }
-
-  if (
-    /return .* from your graveyard to your hand|return target .* card from .* graveyard|return up to .* cards? from .* graveyard|put target .* card from your graveyard into your hand/.test(
-      oracleText
-    )
-  ) {
-    addScore("Recursão", 92);
-  }
-
-  // COMPRA.
-  if (
-    /draw (a|one|two|three|four|five|six|seven|\d+) cards?|draw cards equal|draw that many cards|draw an additional card|draw a card|investigate/.test(
-      oracleText
-    )
-  ) {
-    addScore("Compra", 88);
-  }
-
-  // RAMP: somente não-terrenos.
-  if (
-    /add \{[wubrgc]|add one mana|add two mana|add three mana|add x mana|treasure token|search your library for .* land card|put .* land card onto the battlefield|additional land on each of your turns/.test(
-      oracleText
-    )
-  ) {
-    addScore("Ramp", 84);
-  }
-
-  // PROTEÇÃO também absorve blink defensivo.
-  if (
-    /gains? hexproof|gains? indestructible|protection from|phase out|phases out|regenerate|prevent all damage|can't be the target|cannot be the target/.test(
-      oracleText
-    )
-  ) {
-    addScore("Proteção", 80);
-  }
-
-  if (
-    /exile .* you control.*return|exile target .* you control.*return|return that card to the battlefield|return it to the battlefield under its owner's control|exile .* then return/.test(
-      oracleText
-    )
-  ) {
-    addScore("Proteção", 76);
-  }
-
-  // EVASÃO só quando a carta cria evasão de verdade.
-  // Flying, menace, deathtouch etc. escritos apenas como keyword da própria carta
-  // não bastam para classificá-la aqui.
-  if (
-    /can't be blocked|cannot be blocked|target creature gains? flying|target creature gains? menace|creatures you control gain flying|creatures you control gain menace|creatures you control can't be blocked|creatures you control cannot be blocked/.test(
-      oracleText
-    )
-  ) {
-    addScore("Evasão", 72);
-  }
-
-  // CÓPIA.
-  if (
-    /copy target|copy .* spell|copy .* ability|create a token that's a copy|create a token that is a copy|copy of|triggers an additional time|trigger an additional time/.test(
-      oracleText
-    )
-  ) {
-    addScore("Cópia", 70);
-  }
-
-  // ROUBO.
-  if (
-    /gain control of|control of target|you control enchanted|exchange control/.test(
-      oracleText
-    )
-  ) {
-    addScore("Roubo", 68);
-  }
-
-  // DRENO.
-  if (
-    /each opponent loses|target opponent loses|opponents lose|loses? \d+ life|loses? x life/.test(
-      oracleText
-    )
-  ) {
-    addScore("Dreno", 66);
-  }
-
-  // GANHO DE VIDA. Lifelink sozinho não força a categoria.
-  if (/gain \d+ life|gain life|gains? life/.test(oracleText)) {
-    addScore("Ganho de vida", 64);
-  }
-
-  // MILL.
-  if (
-    /mill \d|mills? \d|mill cards|put the top .* cards? of .* library into .* graveyard/.test(
-      oracleText
-    )
-  ) {
-    addScore("Mill", 62);
-  }
-
-  // INFECT / VENENO.
-  if (/poison counter|poison counters|poisoned|toxic \d|toxic x/.test(oracleText)) {
-    addScore("Infect", 60);
-  }
-
-  if (scores.size > 0) {
-    return [...scores.entries()].sort((a, b) => b[1] - a[1])[0][0];
-  }
-
-  // Fallbacks no estilo Archidekt: se nenhuma função principal foi detectada,
-  // criaturas e instantâneas ainda ficam em grupos úteis em vez de virar tudo
-  // "Sem categoria".
-  if (typeLine.includes("creature")) return "Criaturas";
-  if (typeLine.includes("instant")) return "Instantâneas";
-
-  return "Sem categoria";
+  return row.manual_category?.trim() || "Sem categoria";
 }
 
 function getColorGroup(row: DeckCardRow) {
@@ -790,7 +789,7 @@ function getOrganizationGroup(row: DeckCardRow, organizeBy: OrganizeBy) {
       return getNameGroup(row);
     case "Categoria":
     default:
-      return getFunctionalCategory(row);
+      return getManualCategory(row);
   }
 }
 
@@ -808,30 +807,39 @@ function getGroupOrder(rows: DeckCardRow[], organizeBy: OrganizeBy) {
   }
 
   if (organizeBy === "Categoria") {
-    const categoryOrder = [
-      "Comandante",
-      "Cópia",
-      "Criaturas",
-      "Dreno",
-      "Compra",
-      "Evasão",
-      "Infect",
-      "Instantâneas",
-      "Terrenos",
-      "Ganho de vida",
-      "Mill",
-      "Proteção",
-      "Ramp",
-      "Recursão",
-      "Remoção",
-      "Roubo",
-      "Tutor",
-      "Sem categoria",
-    ];
-
-    return categoryOrder.filter((groupName) =>
-      rows.some((row) => getFunctionalCategory(row) === groupName)
+    const categories = Array.from(
+      new Set(
+        rows
+          .map((row) => getManualCategory(row))
+          .filter(
+            (category) =>
+              category !== "Comandante" &&
+              category !== "Sem categoria"
+          )
+      )
+    ).sort((a, b) =>
+      a.localeCompare(b, "pt-BR", { sensitivity: "base" })
     );
+
+    const result: string[] = [];
+
+    if (rows.some((row) => row.board === "commander")) {
+      result.push("Comandante");
+    }
+
+    result.push(...categories);
+
+    if (
+      rows.some(
+        (row) =>
+          row.board !== "commander" &&
+          getManualCategory(row) === "Sem categoria"
+      )
+    ) {
+      result.push("Sem categoria");
+    }
+
+    return result;
   }
 
   const groups = Array.from(
@@ -979,6 +987,15 @@ export default function DeckPage() {
   const [isPublic, setIsPublic] = useState(true);
   const [description, setDescription] = useState("");
   const [deckTags, setDeckTags] = useState<string[]>([]);
+  const [customCategories, setCustomCategories] = useState<string[]>([]);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [categorySaving, setCategorySaving] = useState(false);
+  const [categoryError, setCategoryError] = useState("");
+  const [categoryDragOver, setCategoryDragOver] = useState<string | null>(null);
+  const [selectedCategoryCardIds, setSelectedCategoryCardIds] = useState<
+    Set<string>
+  >(() => new Set());
+  const categoryCardDraggingRef = useRef(false);
   const [tagInput, setTagInput] = useState("");
   const [tagSaving, setTagSaving] = useState(false);
   const [visibilitySaving, setVisibilitySaving] = useState(false);
@@ -1003,15 +1020,91 @@ export default function DeckPage() {
     useState(false);
   const [printingOptions, setPrintingOptions] =
     useState<CardPrinting[]>([]);
+  const [printingSearch, setPrintingSearch] = useState("");
   const [printingLoading, setPrintingLoading] =
     useState(false);
   const [changingPrinting, setChangingPrinting] =
     useState(false);
   const [printingError, setPrintingError] =
     useState("");
-  const [organizeBy, setOrganizeBy] = useState<OrganizeBy>("Categoria");
+  const [organizeBy, setOrganizeBy] = useState<OrganizeBy>("Tipo");
   const [viewMode, setViewMode] = useState("Stack");
-  const [statsOpen, setStatsOpen] = useState(true);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [duplicatingDeck, setDuplicatingDeck] = useState(false);
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+  const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
+  const [deckVersions, setDeckVersions] = useState<DeckVersionSummary[]>([]);
+  const [versionHistoryError, setVersionHistoryError] = useState("");
+  const [versionDiffLoading, setVersionDiffLoading] = useState(false);
+  const [versionDiff, setVersionDiff] = useState<VersionDiff | null>(null);
+  const [undoLabel, setUndoLabel] = useState("");
+  const undoActionRef = useRef<UndoAction | null>(null);
+  const undoTimerRef = useRef<number | null>(null);
+  const cardSearchCacheRef = useRef<Map<string, LocalCardSearchRow>>(new Map());
+
+  useEffect(() => {
+    let animationFrame: number | null = null;
+    let scrollSpeed = 0;
+
+    function scrollLoop() {
+      if (!categoryCardDraggingRef.current || scrollSpeed === 0) {
+        animationFrame = null;
+        return;
+      }
+
+      window.scrollBy(0, scrollSpeed);
+      animationFrame = requestAnimationFrame(scrollLoop);
+    }
+
+    function handleDragOver(event: DragEvent) {
+      if (!categoryCardDraggingRef.current) return;
+
+      const mouseY = event.clientY;
+      const screenHeight = window.innerHeight;
+      const scrollZone = 160;
+      const maxSpeed = 24;
+
+      if (mouseY < scrollZone) {
+        const strength = (scrollZone - mouseY) / scrollZone;
+        scrollSpeed = -(6 + maxSpeed * strength);
+      } else if (mouseY > screenHeight - scrollZone) {
+        const strength =
+          (mouseY - (screenHeight - scrollZone)) / scrollZone;
+        scrollSpeed = 6 + maxSpeed * strength;
+      } else {
+        scrollSpeed = 0;
+      }
+
+      if (scrollSpeed !== 0 && animationFrame === null) {
+        animationFrame = requestAnimationFrame(scrollLoop);
+      }
+    }
+
+    function stopAutoScroll() {
+      categoryCardDraggingRef.current = false;
+      scrollSpeed = 0;
+
+      if (animationFrame !== null) {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = null;
+      }
+    }
+
+    document.addEventListener("dragover", handleDragOver);
+    document.addEventListener("dragend", stopAutoScroll);
+    document.addEventListener("drop", stopAutoScroll);
+
+    return () => {
+      document.removeEventListener("dragover", handleDragOver);
+      document.removeEventListener("dragend", stopAutoScroll);
+      document.removeEventListener("drop", stopAutoScroll);
+
+      if (animationFrame !== null) {
+        cancelAnimationFrame(animationFrame);
+      }
+    };
+  }, []);
 
   const deckArt = "/hero-bg.jpg";
 
@@ -1037,6 +1130,701 @@ export default function DeckPage() {
   const [problemsOpen, setProblemsOpen] = useState(false);
   const problemsMenuRef = useRef<HTMLDivElement | null>(null);
 
+
+  function offerUndo(label: string, run: () => Promise<void>) {
+    if (undoTimerRef.current) {
+      window.clearTimeout(undoTimerRef.current);
+    }
+
+    undoActionRef.current = { label, run };
+    setUndoLabel(label);
+
+    undoTimerRef.current = window.setTimeout(() => {
+      undoActionRef.current = null;
+      setUndoLabel("");
+    }, 9000);
+  }
+
+  async function runUndoAction() {
+    const action = undoActionRef.current;
+    if (!action) return;
+
+    undoActionRef.current = null;
+    setUndoLabel("");
+
+    if (undoTimerRef.current) {
+      window.clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+
+    try {
+      await action.run();
+    } catch (error) {
+      console.error("Erro ao desfazer ação:", error);
+      setErrorMessage("Não foi possível desfazer a última ação.");
+    }
+  }
+
+  async function loadVersionHistory() {
+    if (!deck) return;
+
+    setVersionHistoryOpen(true);
+    setVersionHistoryLoading(true);
+    setVersionHistoryError("");
+    setVersionDiff(null);
+
+    const rootId = deck.root_deck_id ?? deck.id;
+
+    const { data, error } = await supabase
+      .from("decks")
+      .select(
+        "id, name, parent_deck_id, root_deck_id, version_number, created_at, updated_at"
+      )
+      .or(`id.eq.${rootId},root_deck_id.eq.${rootId}`)
+      .order("version_number", { ascending: true })
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("Erro ao carregar histórico de versões:", error);
+      setVersionHistoryError(
+        "Não foi possível carregar o histórico. Confirme se a migration de versões foi aplicada."
+      );
+      setDeckVersions([]);
+    } else {
+      setDeckVersions((data ?? []) as DeckVersionSummary[]);
+    }
+
+    setVersionHistoryLoading(false);
+  }
+
+  async function compareWithVersion(version: DeckVersionSummary) {
+    if (!deck || version.id === deck.id) return;
+
+    setVersionDiffLoading(true);
+    setVersionDiff(null);
+    setVersionHistoryError("");
+
+    try {
+      const { data: oldRowsData, error: oldRowsError } = await supabase
+        .from("deck_cards")
+        .select("scryfall_id, oracle_id, quantity, board")
+        .eq("deck_id", version.id);
+
+      if (oldRowsError) throw oldRowsError;
+
+      const oldRows = (oldRowsData ?? []) as Array<{
+        scryfall_id: string;
+        oracle_id: string | null;
+        quantity: number;
+        board: ImportBoard;
+      }>;
+
+      const missingNames = Array.from(
+        new Set(oldRows.map((row) => row.scryfall_id))
+      );
+
+      const { data: oldCardData, error: oldCardError } =
+        missingNames.length > 0
+          ? await supabase
+              .from("cards")
+              .select("scryfall_id, name")
+              .in("scryfall_id", missingNames)
+          : { data: [], error: null };
+
+      if (oldCardError) throw oldCardError;
+
+      const namesByScryfall = new Map<string, string>(
+        (oldCardData ?? []).map((row) => [row.scryfall_id, row.name])
+      );
+
+      type DiffCounter = {
+        name: string;
+        board: ImportBoard;
+        quantity: number;
+      };
+
+      const oldMap = new Map<string, DiffCounter>();
+      const currentMap = new Map<string, DiffCounter>();
+
+      for (const row of oldRows) {
+        const key = `${row.oracle_id ?? row.scryfall_id}:${row.board}`;
+        const existing = oldMap.get(key);
+
+        oldMap.set(key, {
+          name:
+            existing?.name ??
+            namesByScryfall.get(row.scryfall_id) ??
+            row.scryfall_id,
+          board: row.board,
+          quantity: (existing?.quantity ?? 0) + row.quantity,
+        });
+      }
+
+      for (const row of deckCards) {
+        const key = `${row.oracle_id ?? row.scryfall_id}:${row.board}`;
+        const existing = currentMap.get(key);
+
+        currentMap.set(key, {
+          name:
+            existing?.name ??
+            row.card?.name ??
+            row.scryfall_id,
+          board: row.board,
+          quantity: (existing?.quantity ?? 0) + row.quantity,
+        });
+      }
+
+      const keys = new Set([...oldMap.keys(), ...currentMap.keys()]);
+      const added: VersionDiffLine[] = [];
+      const removed: VersionDiffLine[] = [];
+
+      for (const key of keys) {
+        const before = oldMap.get(key);
+        const now = currentMap.get(key);
+        const beforeQuantity = before?.quantity ?? 0;
+        const nowQuantity = now?.quantity ?? 0;
+
+        if (nowQuantity > beforeQuantity && now) {
+          added.push({
+            name: now.name,
+            board: now.board,
+            quantity: nowQuantity - beforeQuantity,
+          });
+        }
+
+        if (beforeQuantity > nowQuantity && before) {
+          removed.push({
+            name: before.name,
+            board: before.board,
+            quantity: beforeQuantity - nowQuantity,
+          });
+        }
+      }
+
+      added.sort((a, b) => a.name.localeCompare(b.name));
+      removed.sort((a, b) => a.name.localeCompare(b.name));
+
+      setVersionDiff({
+        fromDeckId: version.id,
+        fromDeckName: version.name,
+        added,
+        removed,
+      });
+    } catch (error) {
+      console.error("Erro ao comparar versões:", error);
+      setVersionHistoryError("Não foi possível comparar essas versões.");
+    } finally {
+      setVersionDiffLoading(false);
+    }
+  }
+
+  async function duplicateDeck() {
+    if (!deck || !isOwner || duplicatingDeck) return;
+
+    setDuplicatingDeck(true);
+    setErrorMessage("");
+
+    try {
+      const now = new Date().toISOString();
+
+      const { data: newDeck, error: newDeckError } = await supabase
+        .from("decks")
+        .insert({
+          owner_id: deck.owner_id,
+          name: `${deck.name} — cópia`,
+          format: deck.format,
+          is_public: false,
+          description: deck.description,
+          tags: deckTags,
+          custom_categories: customCategories,
+          commander_scryfall_id: deck.commander_scryfall_id,
+          parent_deck_id: null,
+          root_deck_id: null,
+          version_number: 1,
+          created_at: now,
+          updated_at: now,
+        })
+        .select("id")
+        .single();
+
+      if (newDeckError || !newDeck) {
+        throw newDeckError ?? new Error("Não foi possível duplicar o deck.");
+      }
+
+      if (deckCards.length > 0) {
+        const { error: cardsError } = await supabase
+          .from("deck_cards")
+          .insert(
+            deckCards.map((row) => ({
+              deck_id: newDeck.id,
+              scryfall_id: row.scryfall_id,
+              oracle_id: row.oracle_id,
+              quantity: row.quantity,
+              board: row.board,
+              manual_category: row.manual_category ?? null,
+              printing_data: row.printing_data ?? null,
+            }))
+          );
+
+        if (cardsError) {
+          await supabase.from("decks").delete().eq("id", newDeck.id);
+          throw cardsError;
+        }
+      }
+
+      router.push(`/decks/${newDeck.id}`);
+    } catch (error) {
+      console.error("Erro ao duplicar deck:", error);
+      setErrorMessage(
+        error instanceof Error ? error.message : "Não foi possível duplicar o deck."
+      );
+      setDuplicatingDeck(false);
+    }
+  }
+
+  function normalizeCategoryName(value: string) {
+    return value.trim().replace(/\s+/g, " ").slice(0, 40);
+  }
+
+  async function persistCustomCategories(nextCategories: string[]) {
+    if (!deck || !isOwner) return false;
+
+    const { error } = await supabase
+      .from("decks")
+      .update({
+        custom_categories: nextCategories,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", deck.id)
+      .eq("owner_id", deck.owner_id);
+
+    if (error) {
+      console.error("Erro ao salvar categorias:", error);
+      setCategoryError(
+        "Não foi possível salvar as categorias. Rode a migration de categorias manuais no Supabase."
+      );
+      return false;
+    }
+
+    setCustomCategories(nextCategories);
+    setDeck((current) =>
+      current
+        ? {
+            ...current,
+            custom_categories: nextCategories,
+            updated_at: new Date().toISOString(),
+          }
+        : current
+    );
+
+    return true;
+  }
+
+  async function createCustomCategory() {
+    if (!deck || !isOwner || categorySaving) return;
+
+    const cleanName = normalizeCategoryName(newCategoryName);
+
+    if (!cleanName) {
+      setCategoryError("Digite um nome para a categoria.");
+      return;
+    }
+
+    if (RESERVED_CATEGORY_NAMES.has(cleanName.toLocaleLowerCase("pt-BR"))) {
+      setCategoryError(
+        `“${cleanName}” é um nome reservado pelo CurveOut.`
+      );
+      return;
+    }
+
+    if (
+      customCategories.some(
+        (category) =>
+          category.toLocaleLowerCase("pt-BR") ===
+          cleanName.toLocaleLowerCase("pt-BR")
+      )
+    ) {
+      setCategoryError("Já existe uma categoria com esse nome.");
+      return;
+    }
+
+    if (customCategories.length >= 30) {
+      setCategoryError("O limite é de 30 categorias por deck.");
+      return;
+    }
+
+    setCategorySaving(true);
+    setCategoryError("");
+
+    const saved = await persistCustomCategories([
+      ...customCategories,
+      cleanName,
+    ]);
+
+    if (saved) {
+      setNewCategoryName("");
+    }
+
+    setCategorySaving(false);
+  }
+
+  async function renameCustomCategory(category: string) {
+    if (!deck || !isOwner || categorySaving) return;
+
+    const proposed = window.prompt(
+      "Novo nome da categoria:",
+      category
+    );
+
+    if (proposed === null) return;
+
+    const cleanName = normalizeCategoryName(proposed);
+
+    if (!cleanName || cleanName === category) return;
+
+    if (RESERVED_CATEGORY_NAMES.has(cleanName.toLocaleLowerCase("pt-BR"))) {
+      setCategoryError(
+        `“${cleanName}” é um nome reservado pelo CurveOut.`
+      );
+      return;
+    }
+
+    if (
+      customCategories.some(
+        (currentCategory) =>
+          currentCategory !== category &&
+          currentCategory.toLocaleLowerCase("pt-BR") ===
+            cleanName.toLocaleLowerCase("pt-BR")
+      )
+    ) {
+      setCategoryError("Já existe uma categoria com esse nome.");
+      return;
+    }
+
+    setCategorySaving(true);
+    setCategoryError("");
+
+    const nextCategories = customCategories.map((currentCategory) =>
+      currentCategory === category ? cleanName : currentCategory
+    );
+
+    const saved = await persistCustomCategories(nextCategories);
+
+    if (!saved) {
+      setCategorySaving(false);
+      return;
+    }
+
+    const { error: cardsError } = await supabase
+      .from("deck_cards")
+      .update({ manual_category: cleanName })
+      .eq("deck_id", deck.id)
+      .eq("manual_category", category);
+
+    if (cardsError) {
+      console.error("Erro ao renomear categoria nas cartas:", cardsError);
+
+      await persistCustomCategories(customCategories);
+
+      setCategoryError(
+        "Não foi possível renomear essa categoria nas cartas."
+      );
+      setCategorySaving(false);
+      return;
+    }
+
+    setDeckCards((current) =>
+      current.map((row) =>
+        row.manual_category === category
+          ? { ...row, manual_category: cleanName }
+          : row
+      )
+    );
+
+    setSelectedCard((current) =>
+      current?.manual_category === category
+        ? { ...current, manual_category: cleanName }
+        : current
+    );
+
+    setCategorySaving(false);
+  }
+
+  async function deleteCustomCategory(category: string) {
+    if (!deck || !isOwner || categorySaving) return;
+
+    const confirmed = window.confirm(
+      `Excluir a categoria “${category}”? As cartas dela voltarão para “Sem categoria”.`
+    );
+
+    if (!confirmed) return;
+
+    setCategorySaving(true);
+    setCategoryError("");
+
+    const { error: cardsError } = await supabase
+      .from("deck_cards")
+      .update({ manual_category: null })
+      .eq("deck_id", deck.id)
+      .eq("manual_category", category);
+
+    if (cardsError) {
+      console.error("Erro ao esvaziar categoria:", cardsError);
+      setCategoryError("Não foi possível excluir essa categoria.");
+      setCategorySaving(false);
+      return;
+    }
+
+    const nextCategories = customCategories.filter(
+      (currentCategory) => currentCategory !== category
+    );
+
+    const saved = await persistCustomCategories(nextCategories);
+
+    if (!saved) {
+      await supabase
+        .from("deck_cards")
+        .update({ manual_category: category })
+        .eq("deck_id", deck.id)
+        .is("manual_category", null);
+
+      setCategorySaving(false);
+      return;
+    }
+
+    setDeckCards((current) =>
+      current.map((row) =>
+        row.manual_category === category
+          ? { ...row, manual_category: null }
+          : row
+      )
+    );
+
+    setSelectedCard((current) =>
+      current?.manual_category === category
+        ? { ...current, manual_category: null }
+        : current
+    );
+
+    setSelectedCategoryCardIds(new Set());
+    setCategorySaving(false);
+  }
+
+  function toggleCategoryCardSelection(row: DeckCardRow) {
+    if (!row.id || row.board === "commander" || row.pending) return;
+
+    setSelectedCategoryCardIds((current) => {
+      const next = new Set(current);
+
+      if (next.has(row.id!)) {
+        next.delete(row.id!);
+      } else {
+        next.add(row.id!);
+      }
+
+      return next;
+    });
+  }
+
+  async function moveCardsToManualCategory(
+    cardIds: string[],
+    category: string | null
+  ) {
+    if (!deck || !isOwner || cardIds.length === 0) return;
+
+    const uniqueIds = Array.from(new Set(cardIds));
+    const rowsToMove = deckCards.filter(
+      (row) =>
+        row.id &&
+        uniqueIds.includes(row.id) &&
+        row.board !== "commander" &&
+        !row.pending
+    );
+
+    if (rowsToMove.length === 0) return;
+
+    const nextCategory =
+      category && category !== "Sem categoria" ? category : null;
+
+    const previousCategories = new Map(
+      rowsToMove.map((row) => [row.id!, row.manual_category ?? null])
+    );
+
+    setDeckCards((current) =>
+      current.map((row) =>
+        row.id && previousCategories.has(row.id)
+          ? { ...row, manual_category: nextCategory }
+          : row
+      )
+    );
+
+    setSelectedCard((current) =>
+      current?.id && previousCategories.has(current.id)
+        ? { ...current, manual_category: nextCategory }
+        : current
+    );
+
+    const ids = rowsToMove
+      .map((row) => row.id)
+      .filter((id): id is string => Boolean(id));
+
+    const { error } = await supabase
+      .from("deck_cards")
+      .update({ manual_category: nextCategory })
+      .in("id", ids);
+
+    if (error) {
+      console.error("Erro ao mover cartas entre categorias:", error);
+
+      setDeckCards((current) =>
+        current.map((row) => {
+          if (!row.id || !previousCategories.has(row.id)) {
+            return row;
+          }
+
+          return {
+            ...row,
+            manual_category: previousCategories.get(row.id) ?? null,
+          };
+        })
+      );
+
+      setSelectedCard((current) => {
+        if (
+          !current?.id ||
+          !previousCategories.has(current.id)
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          manual_category:
+            previousCategories.get(current.id) ?? null,
+        };
+      });
+
+      setCategoryError("Não foi possível mover as cartas.");
+      return;
+    }
+
+    setSelectedCategoryCardIds(new Set());
+    setCategoryDragOver(null);
+  }
+
+  async function setManualCategory(
+    row: DeckCardRow,
+    category: string | null
+  ) {
+    if (!row.id) return;
+
+    await moveCardsToManualCategory([row.id], category);
+  }
+
+  function getDraggedCategoryCardIds(dataTransfer: DataTransfer) {
+    const payload = dataTransfer.getData(
+      "application/x-curveout-card-ids"
+    );
+
+    if (payload) {
+      try {
+        const parsed = JSON.parse(payload);
+
+        if (Array.isArray(parsed)) {
+          return parsed.filter(
+            (value): value is string => typeof value === "string"
+          );
+        }
+      } catch {
+        // cai no text/plain abaixo
+      }
+    }
+
+    const fallback = dataTransfer.getData("text/plain");
+    return fallback ? [fallback] : [];
+  }
+
+
+  function downloadDeckShareImage() {
+    if (!deck || typeof document === "undefined") return;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 1200;
+    canvas.height = 630;
+
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    const gradient = context.createLinearGradient(0, 0, 1200, 630);
+    gradient.addColorStop(0, "#0b0b0d");
+    gradient.addColorStop(1, "#17171b");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    context.strokeStyle = "rgba(255,255,255,.12)";
+    context.lineWidth = 2;
+    context.strokeRect(48, 48, 1104, 534);
+
+    context.fillStyle = "#f4f1e8";
+    context.font = "700 54px system-ui, sans-serif";
+    context.fillText(deck.name.slice(0, 34), 88, 155);
+
+    context.fillStyle = "rgba(244,241,232,.52)";
+    context.font = "500 24px system-ui, sans-serif";
+    context.fillText(`${deck.format} · CurveOut`, 88, 205);
+
+    const summary = [
+      `${deckCardTotal} cartas`,
+      `${deckStats.landCount} terrenos`,
+      `MV ${deckStats.averageManaValue.toFixed(2)}`,
+      deckStats.problems.length === 0
+        ? "Sem problemas detectados"
+        : `${deckStats.problems.length} problema(s)`,
+    ];
+
+    context.fillStyle = "rgba(244,241,232,.76)";
+    context.font = "600 28px system-ui, sans-serif";
+    summary.forEach((item, index) => {
+      context.fillText(item, 88, 300 + index * 48);
+    });
+
+    context.fillStyle = "rgba(244,241,232,.42)";
+    context.font = "500 22px system-ui, sans-serif";
+    const priceText =
+      deckPrice.usd > 0
+        ? `US$ ${deckPrice.usd.toFixed(2)}${
+            deckPriceBrl !== null
+              ? ` · ≈ ${new Intl.NumberFormat("pt-BR", {
+                  style: "currency",
+                  currency: "BRL",
+                }).format(deckPriceBrl)}`
+              : ""
+          }`
+        : "Preço sem referência";
+    context.fillText(priceText, 650, 300);
+
+    if (deckTags.length > 0) {
+      context.fillStyle = "rgba(244,241,232,.35)";
+      context.font = "500 20px system-ui, sans-serif";
+      context.fillText(
+        deckTags.slice(0, 5).map((tag) => `#${tag}`).join("   "),
+        650,
+        350
+      );
+    }
+
+    context.fillStyle = "rgba(244,241,232,.28)";
+    context.font = "500 18px system-ui, sans-serif";
+    context.fillText(window.location.href, 88, 540);
+
+    const link = document.createElement("a");
+    link.download = `${deck.name
+      .toLocaleLowerCase("pt-BR")
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-|-$/g, "") || "deck"}-curveout.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }
 
   function openCardDetails(row: DeckCardRow) {
     setSelectedCardQuantity(String(row.quantity));
@@ -1164,7 +1952,11 @@ export default function DeckPage() {
           format: deck.format,
           is_public: deck.is_public,
           description: deck.description,
+          custom_categories: customCategories,
           commander_scryfall_id: selectedCommander?.scryfall_id ?? null,
+          parent_deck_id: deck.id,
+          root_deck_id: deck.root_deck_id ?? deck.id,
+          version_number: (deck.version_number ?? 1) + 1,
           created_at: now,
           updated_at: now,
         })
@@ -1195,6 +1987,8 @@ export default function DeckPage() {
         oracle_id: row.oracle_id,
         quantity: row.quantity,
         board: row.board,
+        manual_category: row.manual_category ?? null,
+        printing_data: row.printing_data ?? null,
       }));
 
       const { error: cardsError } = await supabase
@@ -1286,7 +2080,7 @@ export default function DeckPage() {
       const cardName = row.card?.name ?? row.scryfall_id;
       const typeLine = row.card?.type_line ?? "";
       const oracleText = row.card?.oracle_text ?? "";
-      const category = getFunctionalCategory(row);
+      const category = getManualCategory(row);
       const color = getColorGroup(row);
       const identity = getColorIdentityGroup(row);
       const board =
@@ -1402,6 +2196,7 @@ export default function DeckPage() {
       colorCounts,
       manaSources,
       problems,
+      commanderIdentity: Array.from(commanderIdentity),
       nonLandCount: nonLandCards.reduce((total, row) => total + row.quantity, 0),
     };
   }, [primaryDeckCards, deckCardTotal, deck?.format]);
@@ -1441,6 +2236,10 @@ export default function DeckPage() {
   }, [primaryDeckCards]);
 
   const deckPriceBrl = usdBrlRate ? deckPrice.usd * usdBrlRate : null;
+
+  const commanderIdentityLabel = getColorIdentityName(
+    deckStats.commanderIdentity
+  );
   const selectedCardUsd = parseUsdPrice(selectedCard?.card?.prices?.usd);
   const selectedCardBrl =
     selectedCardUsd !== null && usdBrlRate
@@ -1512,13 +2311,71 @@ export default function DeckPage() {
   }
 
   const deckCardsByType = useMemo(() => {
-    const groupOrder = getGroupOrder(visibleDeckCards, organizeBy);
+    if (organizeBy === "Categoria") {
+      const hasSearch = deckSearch.trim().length > 0;
+
+      const groupNames: string[] = [];
+
+      if (
+        visibleDeckCards.some((row) => row.board === "commander")
+      ) {
+        groupNames.push("Comandante");
+      }
+
+      groupNames.push(...customCategories);
+
+      const hasUnassigned = visibleDeckCards.some(
+        (row) =>
+          row.board !== "commander" &&
+          getManualCategory(row) === "Sem categoria"
+      );
+
+      if (hasUnassigned || (isOwner && !hasSearch)) {
+        groupNames.push("Sem categoria");
+      }
+
+      return groupNames
+        .map((groupName) => {
+          const cards = visibleDeckCards
+            .filter(
+              (row) => getManualCategory(row) === groupName
+            )
+            .sort((a, b) =>
+              (a.card?.name ?? a.scryfall_id).localeCompare(
+                b.card?.name ?? b.scryfall_id,
+                "pt-BR",
+                { sensitivity: "base" }
+              )
+            );
+
+          return {
+            name: groupName,
+            cards,
+            quantity: cards.reduce(
+              (total, row) => total + row.quantity,
+              0
+            ),
+          };
+        })
+        .filter(
+          (group) =>
+            !hasSearch ||
+            group.cards.length > 0 ||
+            group.name === "Comandante"
+        );
+    }
+
+    const groupOrder = getGroupOrder(
+      visibleDeckCards,
+      organizeBy
+    );
 
     return groupOrder
       .map((groupName) => {
         const cards = visibleDeckCards
           .filter(
-            (row) => getOrganizationGroup(row, organizeBy) === groupName
+            (row) =>
+              getOrganizationGroup(row, organizeBy) === groupName
           )
           .sort((a, b) =>
             (a.card?.name ?? a.scryfall_id).localeCompare(
@@ -1538,7 +2395,13 @@ export default function DeckPage() {
         };
       })
       .filter((group) => group.cards.length > 0);
-  }, [visibleDeckCards, organizeBy]);
+  }, [
+    visibleDeckCards,
+    organizeBy,
+    customCategories,
+    isOwner,
+    deckSearch,
+  ]);
 
   const cardNavigationOrder = useMemo(
     () => deckCardsByType.flatMap((group) => group.cards),
@@ -1638,7 +2501,7 @@ export default function DeckPage() {
     const { data, error } = await supabase
       .from("deck_cards")
       .select(
-        "id, deck_id, scryfall_id, oracle_id, quantity, board, created_at"
+        "id, deck_id, scryfall_id, oracle_id, quantity, board, manual_category, printing_data, created_at"
       )
       .eq("deck_id", deckId)
       .order("created_at", { ascending: true });
@@ -1840,10 +2703,16 @@ export default function DeckPage() {
     }
 
     setDeckCards(
-      rows.map((row) => ({
-        ...row,
-        card: cardsById.get(row.scryfall_id),
-      }))
+      rows.map((row) => {
+        const resolvedCard = cardsById.get(row.scryfall_id);
+
+        return {
+          ...row,
+          card: row.printing_data
+            ? applyPrintingSnapshot(resolvedCard, row.printing_data)
+            : resolvedCard,
+        };
+      })
     );
   }
 
@@ -1866,7 +2735,7 @@ export default function DeckPage() {
         const { data: startsWithData, error: startsWithError } =
           await supabase
             .from("cards")
-            .select("name")
+            .select("scryfall_id, oracle_id, name, type_line, color_identity, card_data, image_uri, image_uri_large")
             .ilike("name", `${escapedQuery}%`)
             .order("name", { ascending: true })
             .limit(10);
@@ -1876,17 +2745,21 @@ export default function DeckPage() {
         }
 
         const names = new Map<string, string>();
+        const cache = new Map<string, LocalCardSearchRow>();
 
         for (const row of startsWithData ?? []) {
           if (typeof row.name !== "string") continue;
-          names.set(row.name.toLocaleLowerCase("pt-BR"), row.name);
+          const typedRow = row as LocalCardSearchRow;
+          const key = row.name.toLocaleLowerCase("pt-BR");
+          names.set(key, row.name);
+          cache.set(key, typedRow);
         }
 
         if (names.size < 10) {
           const { data: containsData, error: containsError } =
             await supabase
               .from("cards")
-              .select("name")
+              .select("scryfall_id, oracle_id, name, type_line, color_identity, card_data, image_uri, image_uri_large")
               .ilike("name", `%${escapedQuery}%`)
               .order("name", { ascending: true })
               .limit(20);
@@ -1902,6 +2775,7 @@ export default function DeckPage() {
 
             if (!names.has(key)) {
               names.set(key, row.name);
+              cache.set(key, row as LocalCardSearchRow);
             }
 
             if (names.size >= 10) break;
@@ -1912,6 +2786,7 @@ export default function DeckPage() {
 
         const suggestions = Array.from(names.values()).slice(0, 10);
 
+        cardSearchCacheRef.current = cache;
         setCardSearchResults(suggestions);
         setHighlightedCardIndex(0);
         setCardSearchOpen(suggestions.length > 0);
@@ -1948,7 +2823,7 @@ export default function DeckPage() {
       const { data, error } = await supabase
         .from("decks")
         .select(
-          "id, owner_id, name, format, is_public, description, commander_scryfall_id, created_at, updated_at"
+          "id, owner_id, name, format, is_public, description, commander_scryfall_id, parent_deck_id, root_deck_id, version_number, created_at, updated_at"
         )
         .eq("id", params.id)
         .maybeSingle();
@@ -1996,9 +2871,47 @@ export default function DeckPage() {
         );
       }
 
+      let loadedCustomCategories: string[] = [];
+
+      const {
+        data: categoryData,
+        error: categoryLoadError,
+      } = await supabase
+        .from("decks")
+        .select("custom_categories")
+        .eq("id", data.id)
+        .maybeSingle();
+
+      if (categoryLoadError) {
+        console.warn(
+          "Categorias manuais ainda não disponíveis. Rode a migration no Supabase:",
+          categoryLoadError.message
+        );
+      } else if (Array.isArray(categoryData?.custom_categories)) {
+        loadedCustomCategories = categoryData.custom_categories
+          .filter(
+            (category): category is string =>
+              typeof category === "string" &&
+              category.trim().length > 0
+          )
+          .map((category) => normalizeCategoryName(category))
+          .filter(
+            (category, index, values) =>
+              !RESERVED_CATEGORY_NAMES.has(
+                category.toLocaleLowerCase("pt-BR")
+              ) &&
+              values.findIndex(
+                (value) =>
+                  value.toLocaleLowerCase("pt-BR") ===
+                  category.toLocaleLowerCase("pt-BR")
+              ) === index
+          );
+      }
+
       const hydratedDeck: Deck = {
         ...data,
         tags: loadedTags,
+        custom_categories: loadedCustomCategories,
       };
 
       setDeck(hydratedDeck);
@@ -2007,8 +2920,25 @@ export default function DeckPage() {
       setIsPublic(data.is_public);
       setDescription(data.description ?? "");
       setDeckTags(loadedTags);
+      setCustomCategories(loadedCustomCategories);
 
-      setIsOwner(Boolean(user && user.id === data.owner_id));
+      const ownerViewingDeck = Boolean(user && user.id === data.owner_id);
+      setIsOwner(ownerViewingDeck);
+
+      if (ownerViewingDeck) {
+        const { error: lastOpenedError } = await supabase
+          .from("decks")
+          .update({ last_opened_at: new Date().toISOString() })
+          .eq("id", data.id)
+          .eq("owner_id", data.owner_id);
+
+        if (lastOpenedError) {
+          console.warn(
+            "Não foi possível registrar a última abertura do deck:",
+            lastOpenedError.message
+          );
+        }
+      }
 
       await loadDeckCards(data.id);
 
@@ -2059,6 +2989,36 @@ export default function DeckPage() {
     };
   }, [priceOpen, problemsOpen]);
 
+  const filteredPrintingOptions = useMemo(() => {
+    const normalizedQuery = printingSearch
+      .trim()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLocaleLowerCase("pt-BR");
+
+    if (!normalizedQuery) {
+      return printingOptions;
+    }
+
+    return printingOptions.filter((printing) => {
+      const searchableText = [
+        printing.set_name,
+        printing.set,
+        printing.collector_number,
+        `#${printing.collector_number}`,
+        printing.lang,
+        printing.released_at,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLocaleLowerCase("pt-BR");
+
+      return searchableText.includes(normalizedQuery);
+    });
+  }, [printingOptions, printingSearch]);
+
   async function loadCardPrintings(row: DeckCardRow) {
     const oracleId = row.oracle_id ?? row.card?.oracle_id;
 
@@ -2071,6 +3031,7 @@ export default function DeckPage() {
 
     setPrintingLoading(true);
     setPrintingError("");
+    setPrintingSearch("");
     setPrintingOptions([]);
 
     try {
@@ -2093,7 +3054,51 @@ export default function DeckPage() {
         return;
       }
 
-      setPrintingOptions(result.printings ?? []);
+      const printings = result.printings ?? [];
+      setPrintingOptions(printings);
+
+      const currentPrinting = printings.find(
+        (printing) => printing.scryfall_id === row.scryfall_id
+      );
+
+      if (currentPrinting && row.id && isOwner) {
+        const { error: snapshotError } = await supabase
+          .from("deck_cards")
+          .update({ printing_data: currentPrinting })
+          .eq("id", row.id);
+
+        if (!snapshotError) {
+          setDeckCards((current) =>
+            current.map((cardRow) =>
+              cardRow.id === row.id
+                ? {
+                    ...cardRow,
+                    printing_data: currentPrinting,
+                    card: applyPrintingSnapshot(
+                      cardRow.card,
+                      currentPrinting
+                    ),
+                  }
+                : cardRow
+            )
+          );
+
+          setSelectedCard((current) => {
+            if (!current || current.id !== row.id) {
+              return current;
+            }
+
+            return {
+              ...current,
+              printing_data: currentPrinting,
+              card: applyPrintingSnapshot(
+                current.card,
+                currentPrinting
+              ),
+            };
+          });
+        }
+      }
     } catch (error) {
       console.error("Erro ao carregar impressões:", error);
       setPrintingError(
@@ -2116,7 +3121,35 @@ export default function DeckPage() {
     }
 
     if (printing.scryfall_id === selectedCard.scryfall_id) {
+      setChangingPrinting(true);
+      setPrintingError("");
+
+      const { error: snapshotError } = await supabase
+        .from("deck_cards")
+        .update({ printing_data: printing })
+        .eq("id", selectedCard.id);
+
+      if (snapshotError) {
+        console.error("Erro ao salvar impressão selecionada:", snapshotError);
+        setPrintingError("Não foi possível aplicar esta impressão.");
+        setChangingPrinting(false);
+        return;
+      }
+
+      const refreshedCard: DeckCardRow = {
+        ...selectedCard,
+        printing_data: printing,
+        card: applyPrintingSnapshot(selectedCard.card, printing),
+      };
+
+      setDeckCards((current) =>
+        current.map((row) =>
+          row.id === selectedCard.id ? refreshedCard : row
+        )
+      );
+      setSelectedCard(refreshedCard);
       setPrintingPickerOpen(false);
+      setChangingPrinting(false);
       return;
     }
 
@@ -2148,6 +3181,7 @@ export default function DeckPage() {
         .from("deck_cards")
         .update({
           quantity: existingPrinting.quantity + selectedCard.quantity,
+          printing_data: printing,
         })
         .eq("id", existingPrinting.id);
 
@@ -2185,6 +3219,7 @@ export default function DeckPage() {
       .update({
         scryfall_id: printing.scryfall_id,
         oracle_id: printing.oracle_id,
+        printing_data: printing,
       })
       .eq("id", selectedCard.id);
 
@@ -2199,22 +3234,8 @@ export default function DeckPage() {
       ...selectedCard,
       scryfall_id: printing.scryfall_id,
       oracle_id: printing.oracle_id,
-      card: {
-        id: printing.scryfall_id,
-        oracle_id: printing.oracle_id ?? undefined,
-        name: printing.name,
-        type_line: printing.type_line ?? undefined,
-        set: printing.set,
-        set_name: printing.set_name,
-        collector_number: printing.collector_number,
-        lang: printing.lang,
-        released_at: printing.released_at,
-        printing_source: "exact",
-        image_uris: {
-          normal: printing.image_uri ?? undefined,
-          large: printing.image_uri_large ?? undefined,
-        },
-      },
+      printing_data: printing,
+      card: applyPrintingSnapshot(selectedCard.card, printing),
     };
 
     setSelectedCardQuantity(String(updatedCard.quantity));
@@ -2234,7 +3255,12 @@ export default function DeckPage() {
       updated_at: updatedAt,
     });
 
-    await loadDeckCards(deck.id);
+    setDeckCards((current) =>
+      current.map((row) =>
+        row.id === selectedCard.id ? updatedCard : row
+      )
+    );
+
     setChangingPrinting(false);
   }
 
@@ -2535,7 +3561,37 @@ export default function DeckPage() {
             : "deck"
       );
 
-      await loadDeckCards(deck.id);
+      if (existingTarget) {
+        await loadDeckCards(deck.id);
+      } else {
+        setDeckCards((current) =>
+          current.map((card) =>
+            card.id === row.id ? { ...card, board: targetBoard } : card
+          )
+        );
+
+        const previousBoard = row.board;
+
+        offerUndo(
+          `${row.card?.name ?? "Carta"} movida para ${getBoardLabel(targetBoard)}`,
+          async () => {
+            if (!row.id) return;
+
+            const { error: undoError } = await supabase
+              .from("deck_cards")
+              .update({ board: previousBoard })
+              .eq("id", row.id);
+
+            if (undoError) throw undoError;
+
+            setDeckCards((current) =>
+              current.map((card) =>
+                card.id === row.id ? { ...card, board: previousBoard } : card
+              )
+            );
+          }
+        );
+      }
     } catch (error) {
       console.error("Erro ao mover carta entre boards:", error);
       setErrorMessage(
@@ -2695,7 +3751,11 @@ export default function DeckPage() {
 
     setSelectedCardQuantity(String(quantity));
 
-    await loadDeckCards(deck.id);
+    setDeckCards((current) =>
+      current.map((card) =>
+        card.id === row.id ? { ...card, quantity } : card
+      )
+    );
   }
 
   async function increaseCardQuantity(row: DeckCardRow) {
@@ -2717,7 +3777,38 @@ export default function DeckPage() {
       }
 
       setSelectedCard(null);
-      await loadDeckCards(deck.id);
+      setDeckCards((current) => current.filter((card) => card.id !== row.id));
+
+      offerUndo(`${row.card?.name ?? "Carta"} removida`, async () => {
+        const { data: restored, error: restoreError } = await supabase
+          .from("deck_cards")
+          .insert({
+            deck_id: row.deck_id,
+            scryfall_id: row.scryfall_id,
+            oracle_id: row.oracle_id,
+            quantity: 1,
+            board: row.board,
+            manual_category: row.manual_category ?? null,
+            printing_data: row.printing_data ?? null,
+          })
+          .select("id, created_at")
+          .single();
+
+        if (restoreError || !restored) {
+          throw restoreError ?? new Error("Não foi possível restaurar a carta.");
+        }
+
+        setDeckCards((current) => [
+          ...current,
+          {
+            ...row,
+            id: restored.id,
+            quantity: 1,
+            created_at: restored.created_at,
+          },
+        ]);
+      });
+
       return;
     }
 
@@ -2728,119 +3819,173 @@ export default function DeckPage() {
     const cleanName = cardName.trim();
     const destinationBoard = getBoardFromTab(activeBoardTab);
 
-    if (!deck || !isOwner || !cleanName || addingCard) {
-      return;
-    }
+    if (!deck || !isOwner || !cleanName || addingCard) return;
 
     setAddingCard(true);
     setCardSearchError("");
     setCardSearchStatus(`Adicionando ${cleanName}...`);
 
     try {
-      const { data: localCard, error: localCardError } = await supabase
-        .from("cards")
-        .select("scryfall_id, oracle_id, name")
-        .eq("name", cleanName)
-        .limit(1)
-        .maybeSingle();
-
-      if (localCardError) {
-        throw localCardError;
-      }
+      const cacheKey = cleanName.toLocaleLowerCase("pt-BR");
+      let localCard = cardSearchCacheRef.current.get(cacheKey) ?? null;
 
       if (!localCard) {
-        throw new Error("Carta não encontrada no banco local.");
+        const { data, error } = await supabase
+          .from("cards")
+          .select(
+            "scryfall_id, oracle_id, name, type_line, color_identity, card_data, image_uri, image_uri_large"
+          )
+          .eq("name", cleanName)
+          .limit(1)
+          .maybeSingle();
+
+        if (error) throw error;
+        localCard = data as LocalCardSearchRow | null;
       }
 
-      const card = {
-        id: localCard.scryfall_id,
-        oracle_id: localCard.oracle_id ?? undefined,
-        name: localCard.name,
-      };
+      if (!localCard) throw new Error("Carta não encontrada no banco local.");
 
-      const { data: existingCard, error: existingError } = await supabase
-        .from("deck_cards")
-        .select("id, quantity")
-        .eq("deck_id", deck.id)
-        .eq("scryfall_id", card.id)
-        .eq("board", destinationBoard)
-        .maybeSingle();
-
-      if (existingError) {
-        throw existingError;
-      }
-
-      if (existingCard) {
-        const { error: updateError } = await supabase
-          .from("deck_cards")
-          .update({
-            quantity: existingCard.quantity + 1,
-          })
-          .eq("id", existingCard.id);
-
-        if (updateError) {
-          throw updateError;
-        }
-      } else {
-        const { error: insertError } = await supabase
-          .from("deck_cards")
-          .insert({
-            deck_id: deck.id,
-            scryfall_id: card.id,
-            oracle_id: card.oracle_id ?? null,
-            quantity: 1,
-            board: destinationBoard,
-          });
-
-        if (insertError) {
-          throw insertError;
-        }
-      }
-
-      const updatedAt = new Date().toISOString();
-
-      const { error: deckUpdateError } = await supabase
-        .from("decks")
-        .update({
-          updated_at: updatedAt,
-        })
-        .eq("id", deck.id)
-        .eq("owner_id", deck.owner_id);
-
-      if (deckUpdateError) {
-        console.error(
-          "Carta adicionada, mas não foi possível atualizar a data do deck:",
-          deckUpdateError
-        );
-      }
-
-      setDeck({
-        ...deck,
-        updated_at: updatedAt,
-      });
-
-      await loadDeckCards(deck.id);
+      const resolvedCard = resolveLocalCard(localCard);
+      const existingCard = deckCards.find(
+        (row) =>
+          row.scryfall_id === localCard!.scryfall_id &&
+          row.board === destinationBoard
+      );
 
       setCardSearch("");
       setCardSearchResults([]);
       setCardSearchOpen(false);
       setHighlightedCardIndex(0);
+
+      if (existingCard?.id && !existingCard.pending) {
+        const previousQuantity = existingCard.quantity;
+        const nextQuantity = previousQuantity + 1;
+
+        setDeckCards((current) =>
+          current.map((row) =>
+            row.id === existingCard.id
+              ? { ...row, quantity: nextQuantity }
+              : row
+          )
+        );
+
+        const { error: updateError } = await supabase
+          .from("deck_cards")
+          .update({ quantity: nextQuantity })
+          .eq("id", existingCard.id);
+
+        if (updateError) {
+          setDeckCards((current) =>
+            current.map((row) =>
+              row.id === existingCard.id
+                ? { ...row, quantity: previousQuantity }
+                : row
+            )
+          );
+          throw updateError;
+        }
+
+        offerUndo(`${resolvedCard.name} adicionada`, async () => {
+          const { error: undoError } = await supabase
+            .from("deck_cards")
+            .update({ quantity: previousQuantity })
+            .eq("id", existingCard.id);
+
+          if (undoError) throw undoError;
+
+          setDeckCards((current) =>
+            current.map((row) =>
+              row.id === existingCard.id
+                ? { ...row, quantity: previousQuantity }
+                : row
+            )
+          );
+        });
+      } else {
+        const optimisticId = `pending:${Date.now()}:${localCard.scryfall_id}`;
+
+        const optimisticRow: DeckCardRow = {
+          id: optimisticId,
+          deck_id: deck.id,
+          scryfall_id: localCard.scryfall_id,
+          oracle_id: localCard.oracle_id,
+          quantity: 1,
+          board: destinationBoard,
+          manual_category: null,
+          printing_data: null,
+          pending: true,
+          card: resolvedCard,
+        };
+
+        setDeckCards((current) => [...current, optimisticRow]);
+
+        const { data: inserted, error: insertError } = await supabase
+          .from("deck_cards")
+          .insert({
+            deck_id: deck.id,
+            scryfall_id: localCard.scryfall_id,
+            oracle_id: localCard.oracle_id,
+            quantity: 1,
+            board: destinationBoard,
+            manual_category: null,
+            printing_data: null,
+          })
+          .select("id, created_at")
+          .single();
+
+        if (insertError || !inserted) {
+          setDeckCards((current) =>
+            current.filter((row) => row.id !== optimisticId)
+          );
+          throw insertError ?? new Error("Não foi possível adicionar a carta.");
+        }
+
+        const savedRow: DeckCardRow = {
+          ...optimisticRow,
+          id: inserted.id,
+          created_at: inserted.created_at,
+          pending: false,
+        };
+
+        setDeckCards((current) =>
+          current.map((row) => (row.id === optimisticId ? savedRow : row))
+        );
+
+        offerUndo(`${resolvedCard.name} adicionada`, async () => {
+          const { error: undoError } = await supabase
+            .from("deck_cards")
+            .delete()
+            .eq("id", inserted.id);
+
+          if (undoError) throw undoError;
+
+          setDeckCards((current) =>
+            current.filter((row) => row.id !== inserted.id)
+          );
+        });
+      }
+
+      const updatedAt = new Date().toISOString();
+      setDeck({ ...deck, updated_at: updatedAt });
+
+      void supabase
+        .from("decks")
+        .update({ updated_at: updatedAt })
+        .eq("id", deck.id)
+        .eq("owner_id", deck.owner_id);
+
       setCardSearchStatus(
-        `${card.name} adicionada em ${getBoardLabel(destinationBoard)} ✓`
+        `${resolvedCard.name} adicionada em ${getBoardLabel(destinationBoard)} ✓`
       );
 
-      window.setTimeout(() => {
-        setCardSearchStatus("");
-      }, 1800);
+      window.setTimeout(() => setCardSearchStatus(""), 1400);
     } catch (error) {
       console.error("Erro ao adicionar carta:", error);
-
       setCardSearchError(
         error instanceof Error
           ? error.message
           : "Não foi possível adicionar a carta."
       );
-
       setCardSearchStatus("");
     } finally {
       setAddingCard(false);
@@ -3083,24 +4228,26 @@ export default function DeckPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#0b0b0d] px-3 py-8 text-[#f4f1e8] md:px-4 xl:px-5">
+    <main className="min-h-screen overflow-x-hidden bg-[#0b0b0d] px-3 py-5 text-[#f4f1e8] md:px-4 md:py-8 xl:px-5">
       <div className={editing ? "mx-auto w-full max-w-4xl" : "w-full"}>
-        {editing ? (
-          <button
-            type="button"
-            onClick={cancelEditing}
-            className="text-sm text-white/40 transition hover:text-white"
-          >
-            ← Voltar para o deck
-          </button>
-        ) : (
-          <Link
-            href={isOwner ? "/meus-decks" : "/"}
-            className="text-sm text-white/40 transition hover:text-white"
-          >
-            {isOwner ? "← Meus decks" : "← CurveOut"}
-          </Link>
-        )}
+        <div className="sticky top-3 z-[75] mb-4 flex items-center">
+          {editing ? (
+            <button
+              type="button"
+              onClick={cancelEditing}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-[#0b0b0d]/90 px-3.5 py-2 text-xs font-medium text-white/55 shadow-xl shadow-black/20 backdrop-blur-xl transition hover:border-white/25 hover:text-white"
+            >
+              ← Voltar para o deck
+            </button>
+          ) : (
+            <Link
+              href={isOwner ? "/meus-decks" : "/"}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-[#0b0b0d]/90 px-3.5 py-2 text-xs font-medium text-white/55 shadow-xl shadow-black/20 backdrop-blur-xl transition hover:border-white/25 hover:text-white"
+            >
+              {isOwner ? "← Voltar para meus decks" : "← CurveOut"}
+            </Link>
+          )}
+        </div>
 
         <header
           className={`relative mt-10 overflow-visible border-b border-white/10 pb-16 ${
@@ -3433,48 +4580,121 @@ export default function DeckPage() {
                   }).format(new Date(deck.updated_at))}
                 </p>
 
-                {deck.description && (
-                  <p
-                    className="
-                      mt-4 max-w-3xl
-                      whitespace-pre-wrap
-                      break-words
-                      [overflow-wrap:anywhere]
-                      text-sm leading-6
-                      text-white/45
-                    "
+                <div className="mt-3 flex max-w-5xl flex-wrap items-center gap-2 text-[11px] text-white/35">
+                  <span className="rounded-full border border-white/[0.08] bg-black/15 px-2.5 py-1">
+                    {deckCardTotal} cartas
+                  </span>
+                  <span className="rounded-full border border-white/[0.08] bg-black/15 px-2.5 py-1">
+                    {deckStats.landCount} terrenos
+                  </span>
+                  <span className="rounded-full border border-white/[0.08] bg-black/15 px-2.5 py-1">
+                    MV {deckStats.averageManaValue.toFixed(2)}
+                  </span>
+                  <span className="rounded-full border border-white/[0.08] bg-black/15 px-2.5 py-1">
+                    {commanderIdentityLabel}
+                  </span>
+                  {deckPrice.usd > 0 && (
+                    <span className="rounded-full border border-white/[0.08] bg-black/15 px-2.5 py-1">
+                      US$ {deckPrice.usd.toFixed(2)}
+                      {deckPriceBrl !== null
+                        ? ` · ≈ ${new Intl.NumberFormat("pt-BR", {
+                            style: "currency",
+                            currency: "BRL",
+                          }).format(deckPriceBrl)}`
+                        : ""}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (deckStats.problems.length > 0) setProblemsOpen(true);
+                    }}
+                    className={`rounded-full border px-2.5 py-1 transition ${
+                      deckStats.problems.length === 0
+                        ? "border-emerald-300/15 bg-emerald-300/[0.045] text-emerald-100/55"
+                        : "border-amber-300/15 bg-amber-300/[0.045] text-amber-100/60 hover:border-amber-300/30"
+                    }`}
                   >
-                    {truncateText(deck.description, 500)}
-                  </p>
+                    {deckStats.problems.length === 0
+                      ? `${deck.format} legal ✓`
+                      : `${deckStats.problems.length} problema${deckStats.problems.length === 1 ? "" : "s"}`}
+                  </button>
+                </div>
+
+                {deck.description && (
+                  <div className="mt-4 max-w-3xl overflow-hidden rounded-xl border border-white/[0.07] bg-black/10">
+                    <button
+                      type="button"
+                      onClick={() => setNotesOpen((current) => !current)}
+                      className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition hover:bg-white/[0.025]"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-white/20">
+                          Notas do deck
+                        </p>
+                        {!notesOpen && (
+                          <p className="mt-1 truncate text-xs text-white/35">
+                            {truncateText(deck.description, 120)}
+                          </p>
+                        )}
+                      </div>
+                      <span className="text-xs text-white/25">
+                        {notesOpen ? "−" : "+"}
+                      </span>
+                    </button>
+
+                    {notesOpen && (
+                      <p className="whitespace-pre-wrap break-words border-t border-white/[0.06] px-4 py-4 text-sm leading-6 text-white/45 [overflow-wrap:anywhere]">
+                        {deck.description}
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 {(deckTags.length > 0 || isOwner) && (
                   <div className="mt-4 flex max-w-4xl flex-wrap items-center gap-2">
                     {deckTags.map((tag) => (
-                      <span
+                      <button
                         key={tag}
+                        type="button"
+                        title={`Filtrar cartas relacionadas a ${tag}`}
+                        onClick={() => {
+                          setActiveBoardTab("deck");
+                          setDeckSearch(tag);
+                        }}
                         className="
                           inline-flex items-center gap-1.5
                           rounded-full border border-white/10
                           bg-black/20 px-2.5 py-1
                           text-[11px] text-white/45
-                          backdrop-blur-sm
+                          backdrop-blur-sm transition
+                          hover:border-white/20 hover:text-white/70
                         "
                       >
                         {tag}
 
                         {isOwner && (
-                          <button
-                            type="button"
+                          <span
+                            role="button"
+                            tabIndex={0}
                             aria-label={`Remover tag ${tag}`}
-                            disabled={tagSaving}
-                            onClick={() => removeDeckTag(tag)}
-                            className="text-white/20 transition hover:text-white/70 disabled:opacity-30"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              removeDeckTag(tag);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                removeDeckTag(tag);
+                              }
+                            }}
+                            className="text-white/20 transition hover:text-white/70"
                           >
                             ×
-                          </button>
+                          </span>
                         )}
-                      </span>
+                      </button>
                     ))}
 
                     {isOwner && deckTags.length < 8 && (
@@ -3616,6 +4836,7 @@ export default function DeckPage() {
                   )}
 
                   {isOwner && (
+                    <>
                     <button
                       type="button"
                       onClick={openUpdateDeckModal}
@@ -3632,6 +4853,8 @@ export default function DeckPage() {
                     >
                       Criar nova versão
                     </button>
+
+                    </>
                   )}
                 </div>
               </div>
@@ -4176,6 +5399,79 @@ export default function DeckPage() {
                       </div>
                     </div>
 
+                    {organizeBy === "Categoria" && isOwner && (
+                      <div className="mb-5 rounded-xl border border-white/[0.07] bg-black/10 px-3 py-3">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                          <div>
+                            <p className="text-[10px] uppercase tracking-[0.16em] text-white/25">
+                              Categorias manuais
+                            </p>
+                            <p className="mt-1 text-xs text-white/30">
+                              Crie os grupos e arraste as cartas entre eles. Nada é classificado automaticamente.
+                            </p>
+                          </div>
+
+                          <div className="flex w-full gap-2 lg:max-w-md">
+                            <input
+                              type="text"
+                              value={newCategoryName}
+                              maxLength={40}
+                              placeholder="Ex: Ramp, Proteção, Wincons..."
+                              onChange={(event) => {
+                                setNewCategoryName(event.target.value);
+                                if (categoryError) {
+                                  setCategoryError("");
+                                }
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  void createCustomCategory();
+                                }
+                              }}
+                              className="min-w-0 flex-1 rounded-lg border border-white/10 bg-[#111114] px-3 py-2.5 text-xs text-white/70 outline-none transition placeholder:text-white/20 focus:border-white/25"
+                            />
+
+                            <button
+                              type="button"
+                              disabled={categorySaving || !newCategoryName.trim()}
+                              onClick={() => {
+                                void createCustomCategory();
+                              }}
+                              className="shrink-0 rounded-lg border border-white/15 bg-white/[0.04] px-4 py-2.5 text-xs font-medium text-white/65 transition hover:border-white/30 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+                            >
+                              + Criar
+                            </button>
+                          </div>
+                        </div>
+
+                        {selectedCategoryCardIds.size > 0 && (
+                          <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/[0.06] pt-3">
+                            <p className="text-xs text-white/40">
+                              {selectedCategoryCardIds.size} carta
+                              {selectedCategoryCardIds.size === 1 ? "" : "s"} selecionada
+                              {selectedCategoryCardIds.size === 1 ? "" : "s"}.
+                              Arraste uma delas para mover o grupo inteiro.
+                            </p>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedCategoryCardIds(new Set())}
+                              className="text-[11px] text-white/30 underline underline-offset-4 transition hover:text-white/60"
+                            >
+                              Limpar seleção
+                            </button>
+                          </div>
+                        )}
+
+                        {categoryError && (
+                          <p className="mt-3 text-xs text-red-300/65">
+                            {categoryError}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     <div
                       className="w-full overflow-x-hidden pb-6 [zoom:0.69] xl:[zoom:0.75] 2xl:[zoom:0.95]"
                     >
@@ -4189,54 +5485,219 @@ export default function DeckPage() {
                         {deckCardsByType.map((group) => (
                           <section
                             key={group.name}
+                            onDragOver={(event) => {
+                              if (
+                                !isOwner ||
+                                organizeBy !== "Categoria" ||
+                                group.name === "Comandante"
+                              ) {
+                                return;
+                              }
+
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "move";
+                              setCategoryDragOver(group.name);
+                            }}
+                            onDragLeave={(event) => {
+                              if (
+                                event.currentTarget.contains(
+                                  event.relatedTarget as Node | null
+                                )
+                              ) {
+                                return;
+                              }
+
+                              if (categoryDragOver === group.name) {
+                                setCategoryDragOver(null);
+                              }
+                            }}
+                            onDrop={(event) => {
+                              if (
+                                !isOwner ||
+                                organizeBy !== "Categoria" ||
+                                group.name === "Comandante"
+                              ) {
+                                return;
+                              }
+
+                              event.preventDefault();
+
+                              const draggedIds =
+                                getDraggedCategoryCardIds(
+                                  event.dataTransfer
+                                );
+
+                              setCategoryDragOver(null);
+
+                              void moveCardsToManualCategory(
+                                draggedIds,
+                                group.name === "Sem categoria"
+                                  ? null
+                                  : group.name
+                              );
+                            }}
                             className={
                               organizeBy === "Categoria"
-                                ? "mb-10 inline-block w-full break-inside-avoid align-top"
+                                ? `mb-10 inline-block w-full break-inside-avoid rounded-xl align-top transition ${
+                                    categoryDragOver === group.name
+                                      ? "bg-white/[0.045] ring-1 ring-white/25"
+                                      : ""
+                                  }`
                                 : "w-[215px] shrink-0 lg:w-[225px] xl:w-[240px] 2xl:w-[255px]"
                             }
                           >
-                            <div className="mb-3 border-b border-white/10 pb-2">
+                            <div className="mb-3 border-b border-white/10 px-1 pb-2">
                               <div className="flex items-center justify-between gap-3">
-                                <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-white/60">
-                                  {group.name}
-                                </h3>
+                                <div className="min-w-0">
+                                  <h3 className="truncate text-xs font-semibold uppercase tracking-[0.14em] text-white/60">
+                                    {group.name}
+                                  </h3>
 
-                                <span className="text-xs text-white/30">
-                                  {group.quantity}
-                                </span>
+                                  {organizeBy === "Categoria" &&
+                                    group.name !== "Comandante" &&
+                                    categoryDragOver === group.name && (
+                                      <p className="mt-1 text-[10px] text-emerald-200/50">
+                                        Solte aqui
+                                      </p>
+                                    )}
+                                </div>
+
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                  <span className="text-xs text-white/30">
+                                    {group.quantity}
+                                  </span>
+
+                                  {isOwner &&
+                                    organizeBy === "Categoria" &&
+                                    customCategories.includes(group.name) && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          title="Renomear categoria"
+                                          disabled={categorySaving}
+                                          onClick={() => {
+                                            void renameCustomCategory(group.name);
+                                          }}
+                                          className="flex h-6 w-6 items-center justify-center rounded-md text-[11px] text-white/20 transition hover:bg-white/[0.05] hover:text-white/60 disabled:opacity-30"
+                                        >
+                                          ✎
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          title="Excluir categoria"
+                                          disabled={categorySaving}
+                                          onClick={() => {
+                                            void deleteCustomCategory(group.name);
+                                          }}
+                                          className="flex h-6 w-6 items-center justify-center rounded-md text-sm text-white/20 transition hover:bg-red-300/[0.05] hover:text-red-100/60 disabled:opacity-30"
+                                        >
+                                          ×
+                                        </button>
+                                      </>
+                                    )}
+                                </div>
                               </div>
                             </div>
 
                             <div
                               className={
                                 organizeBy === "Categoria"
-                                  ? "relative"
+                                  ? "relative px-1"
                                   : "relative min-h-[460px]"
                               }
                               style={
                                 organizeBy === "Categoria"
                                   ? {
-                                      minHeight: `${Math.max(
-                                        332,
-                                        332 + Math.max(0, group.cards.length - 1) * 112
-                                      )}px`,
+                                      minHeight: `${
+                                        group.cards.length === 0
+                                          ? 120
+                                          : Math.max(
+                                              332,
+                                              332 +
+                                                Math.max(
+                                                  0,
+                                                  group.cards.length - 1
+                                                ) *
+                                                  112
+                                            )
+                                      }px`,
                                     }
                                   : undefined
                               }
                             >
+                              {organizeBy === "Categoria" &&
+                                group.cards.length === 0 &&
+                                group.name !== "Comandante" && (
+                                  <div className="flex min-h-[105px] items-center justify-center rounded-lg border border-dashed border-white/[0.08] bg-white/[0.01] px-3 text-center">
+                                    <p className="text-[10px] leading-4 text-white/20">
+                                      Arraste cartas para esta categoria
+                                    </p>
+                                  </div>
+                                )}
+
                               {group.cards.map((row, index) => {
                                 const image = getProxiedCardImage(row.card);
 
                                 return (
                                   <div
                                     key={`${row.scryfall_id}-${row.board}`}
+                                    draggable={
+                                      isOwner &&
+                                      organizeBy === "Categoria" &&
+                                      row.board !== "commander" &&
+                                      !row.pending &&
+                                      Boolean(row.id)
+                                    }
+                                    onDragStart={(event) => {
+                                      if (
+                                        !row.id ||
+                                        !isOwner ||
+                                        organizeBy !== "Categoria" ||
+                                        row.board === "commander"
+                                      ) {
+                                        event.preventDefault();
+                                        return;
+                                      }
+
+                                      categoryCardDraggingRef.current = true;
+
+                                      const movingIds =
+                                        selectedCategoryCardIds.has(row.id)
+                                          ? Array.from(selectedCategoryCardIds)
+                                          : [row.id];
+
+                                      event.dataTransfer.effectAllowed = "move";
+                                      event.dataTransfer.setData(
+                                        "application/x-curveout-card-ids",
+                                        JSON.stringify(movingIds)
+                                      );
+                                      event.dataTransfer.setData(
+                                        "text/plain",
+                                        row.id
+                                      );
+                                    }}
+                                    onDragEnd={() => {
+                                      categoryCardDraggingRef.current = false;
+                                      setCategoryDragOver(null);
+                                    }}
                                     onClick={() => {
+                                      if (
+                                        isOwner &&
+                                        organizeBy === "Categoria" &&
+                                        row.board !== "commander" &&
+                                        row.id
+                                      ) {
+                                        toggleCategoryCardSelection(row);
+                                        return;
+                                      }
+
                                       setPrintingPickerOpen(false);
                                       setPrintingOptions([]);
                                       setPrintingError("");
                                       openCardDetails(row);
                                     }}
-                                    className="
+                                    className={`
                                       group/card
                                       relative
                                       mx-auto
@@ -4249,7 +5710,21 @@ export default function DeckPage() {
                                       ease-out
                                       hover:z-40
                                       hover:mb-[220px]
-                                    "
+                                      ${
+                                        isOwner &&
+                                        organizeBy === "Categoria" &&
+                                        row.board !== "commander"
+                                          ? "cursor-grab active:cursor-grabbing"
+                                          : ""
+                                      }
+                                      ${
+                                        row.id &&
+                                        selectedCategoryCardIds.has(row.id)
+                                          ? "rounded-[11px] ring-2 ring-white/35 ring-offset-2 ring-offset-[#0b0b0d]"
+                                          : ""
+                                      }
+                                      ${row.pending ? "pointer-events-none opacity-55" : ""}
+                                    `}
                                     style={{
                                       marginTop: index === 0 ? 0 : -220,
                                     }}
@@ -4284,6 +5759,39 @@ export default function DeckPage() {
                                           </div>
                                         </div>
                                       )}
+
+                                      {isOwner &&
+                                        organizeBy === "Categoria" &&
+                                        row.board !== "commander" &&
+                                        row.id && (
+                                          <button
+                                            type="button"
+                                            title={
+                                              selectedCategoryCardIds.has(row.id)
+                                                ? "Remover da seleção"
+                                                : "Selecionar para mover em grupo"
+                                            }
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              toggleCategoryCardSelection(row);
+                                            }}
+                                            className={`
+                                              absolute left-1 top-1 z-20
+                                              flex h-6 w-6 items-center justify-center
+                                              rounded-md border text-[10px]
+                                              backdrop-blur-sm transition
+                                              ${
+                                                selectedCategoryCardIds.has(row.id)
+                                                  ? "border-white/30 bg-white text-black"
+                                                  : "border-white/15 bg-black/75 text-white/45 hover:border-white/30 hover:text-white"
+                                              }
+                                            `}
+                                          >
+                                            {selectedCategoryCardIds.has(row.id)
+                                              ? "✓"
+                                              : ""}
+                                          </button>
+                                        )}
 
                                       {/* QUANTIDADE NORMAL */}
                                       <span
@@ -4667,7 +6175,7 @@ export default function DeckPage() {
           items-center
           gap-6
           px-8 py-7
-          lg:grid-cols-[0.92fr_380px_0.92fr]
+          xl:grid-cols-[minmax(180px,0.92fr)_minmax(320px,380px)_minmax(180px,0.92fr)]
         "
       >
         {/* LADO ESQUERDO */}
@@ -4779,6 +6287,7 @@ export default function DeckPage() {
             <button
               type="button"
               onClick={() => {
+                setPrintingSearch("");
                 setPrintingPickerOpen(true);
                 void loadCardPrintings(selectedCard);
               }}
@@ -4819,6 +6328,21 @@ export default function DeckPage() {
                 {selectedCard.board === "commander"
                   ? "Já é o comandante"
                   : "Definir como comandante"}
+              </button>
+            )}
+
+            {isOwner && selectedCard.board !== "commander" && (
+              <button
+                type="button"
+                onClick={() => {
+                  void decreaseCardQuantity({
+                    ...selectedCard,
+                    quantity: 1,
+                  });
+                }}
+                className="rounded-xl border border-red-300/15 px-5 py-2.5 text-xs font-medium text-red-100/45 transition hover:border-red-300/30 hover:bg-red-300/[0.05] hover:text-red-100/75"
+              >
+                Remover carta
               </button>
             )}
           </div>
@@ -4982,6 +6506,50 @@ export default function DeckPage() {
 
           <div>
             <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
+              Categoria
+            </p>
+
+            <div className="mt-3 border-t border-white/10 pt-3">
+              {selectedCard.board === "commander" ? (
+                <p className="text-sm text-white/65">
+                  Comandante
+                </p>
+              ) : isOwner ? (
+                <div>
+                  <select
+                    value={selectedCard.manual_category ?? ""}
+                    onChange={(event) => {
+                      void setManualCategory(
+                        selectedCard,
+                        event.target.value || null
+                      );
+                    }}
+                    className="w-full rounded-lg border border-white/10 bg-[#111114] px-3 py-2.5 text-sm text-white/65 outline-none transition focus:border-white/25"
+                  >
+                    <option value="">Sem categoria</option>
+                    {customCategories.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+
+                  {customCategories.length === 0 && (
+                    <p className="mt-2 text-[10px] leading-4 text-white/25">
+                      Crie categorias no topo do deck e depois arraste as cartas ou escolha por aqui.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-white/65">
+                  {selectedCard.manual_category ?? "Sem categoria"}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
               Preço
             </p>
 
@@ -5054,7 +6622,10 @@ export default function DeckPage() {
 
             <button
               type="button"
-              onClick={() => setPrintingPickerOpen(false)}
+              onClick={() => {
+                setPrintingPickerOpen(false);
+                setPrintingSearch("");
+              }}
               className="
                 flex h-9 w-9 items-center justify-center
                 rounded-xl
@@ -5067,6 +6638,46 @@ export default function DeckPage() {
             >
               ×
             </button>
+          </div>
+
+          <div className="border-b border-white/10 px-8 py-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="relative w-full sm:max-w-md">
+                <input
+                  type="search"
+                  value={printingSearch}
+                  onChange={(event) => setPrintingSearch(event.target.value)}
+                  placeholder="Buscar por edição, sigla, número..."
+                  autoComplete="off"
+                  className="
+                    w-full rounded-xl
+                    border border-white/10
+                    bg-[#111114]
+                    px-4 py-3 pr-10
+                    text-sm text-white/75
+                    outline-none transition
+                    placeholder:text-white/20
+                    focus:border-white/25
+                  "
+                />
+
+                <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/20">
+                  ⌕
+                </span>
+              </div>
+
+              {!printingLoading && !printingError && printingOptions.length > 0 && (
+                <p className="shrink-0 text-xs text-white/25">
+                  {printingSearch.trim()
+                    ? `${filteredPrintingOptions.length} de ${printingOptions.length} impressões`
+                    : `${printingOptions.length} impressões`}
+                </p>
+              )}
+            </div>
+
+            <p className="mt-2 text-[10px] leading-4 text-white/20">
+              Ex.: Star Trek, TRK, Hobbit, HOB, #196 ou 2025.
+            </p>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-12 py-8">
@@ -5082,9 +6693,23 @@ export default function DeckPage() {
               <div className="flex min-h-[350px] items-center justify-center text-sm text-white/35">
                 Nenhuma outra impressão encontrada.
               </div>
+            ) : filteredPrintingOptions.length === 0 ? (
+              <div className="flex min-h-[350px] flex-col items-center justify-center text-center">
+                <p className="text-sm text-white/45">
+                  Nenhuma edição corresponde a “{printingSearch.trim()}”.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => setPrintingSearch("")}
+                  className="mt-3 text-xs text-white/30 underline underline-offset-4 transition hover:text-white/60"
+                >
+                  Limpar busca
+                </button>
+              </div>
             ) : (
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {printingOptions.map((printing) => {
+                {filteredPrintingOptions.map((printing) => {
                   const selected =
                     printing.scryfall_id === selectedCard.scryfall_id;
 
@@ -5156,6 +6781,24 @@ export default function DeckPage() {
     </div>
   </div>
 )}
+
+
+      {undoLabel && (
+        <div className="fixed bottom-5 left-1/2 z-[120] flex -translate-x-1/2 items-center gap-4 rounded-xl border border-white/15 bg-[#111114]/95 px-4 py-3 shadow-2xl shadow-black/50 backdrop-blur-xl">
+          <p className="max-w-[60vw] truncate text-xs text-white/55">
+            {undoLabel}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              void runUndoAction();
+            }}
+            className="shrink-0 text-xs font-semibold text-[#f4f1e8] transition hover:text-white"
+          >
+            Desfazer
+          </button>
+        </div>
+      )}
 
       {shareDeckOpen && (
         <div
@@ -5283,7 +6926,15 @@ export default function DeckPage() {
               </div>
             </div>
 
-            <div className="flex justify-end border-t border-white/10 px-6 py-5">
+            <div className="flex flex-wrap justify-end gap-2 border-t border-white/10 px-6 py-5">
+              <button
+                type="button"
+                onClick={downloadDeckShareImage}
+                className="rounded-lg border border-white/10 px-5 py-2.5 text-sm font-medium text-white/55 transition hover:border-white/25 hover:bg-white/[0.04] hover:text-white"
+              >
+                Baixar imagem do deck
+              </button>
+
               <button
                 type="button"
                 onClick={copyShareLink}
@@ -5776,6 +7427,173 @@ Sideboard
                   Preparar {parsedImport.totalCopies || ""} cartas
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+      {versionHistoryOpen && (
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-black/80 px-4 py-6 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setVersionHistoryOpen(false);
+            }
+          }}
+        >
+          <div className="flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#0f0f12] shadow-2xl">
+            <div className="flex items-start justify-between gap-5 border-b border-white/10 px-6 py-5">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.2em] text-white/25">
+                  Histórico
+                </p>
+                <h2 className="mt-1 text-xl font-semibold">
+                  Versões do deck
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVersionHistoryOpen(false)}
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 text-white/40 transition hover:bg-white/5 hover:text-white"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              {versionHistoryLoading ? (
+                <p className="py-10 text-center text-sm text-white/35">
+                  Carregando versões...
+                </p>
+              ) : versionHistoryError ? (
+                <p className="rounded-xl border border-red-300/10 bg-red-300/[0.035] px-4 py-3 text-sm text-red-100/55">
+                  {versionHistoryError}
+                </p>
+              ) : deckVersions.length <= 1 ? (
+                <p className="py-10 text-center text-sm text-white/35">
+                  Este deck ainda não possui outras versões.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {deckVersions.map((version) => {
+                    const current = version.id === deck.id;
+                    return (
+                      <div
+                        key={version.id}
+                        className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 transition ${
+                          current
+                            ? "border-white/20 bg-white/[0.055]"
+                            : "border-white/[0.07] bg-white/[0.015]"
+                        }`}
+                      >
+                        <Link
+                          href={`/decks/${version.id}`}
+                          className="min-w-0 flex-1 rounded-lg px-1 py-1 transition hover:bg-white/[0.025]"
+                        >
+                          <p className="truncate text-sm font-medium text-white/70">
+                            {version.name}
+                          </p>
+                          <p className="mt-1 text-[11px] text-white/25">
+                            Versão {version.version_number ?? 1} ·{" "}
+                            {new Intl.DateTimeFormat("pt-BR", {
+                              dateStyle: "medium",
+                            }).format(new Date(version.updated_at))}
+                          </p>
+                        </Link>
+
+                        {current ? (
+                          <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[9px] font-semibold text-black">
+                            ATUAL
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={versionDiffLoading}
+                            onClick={() => {
+                              void compareWithVersion(version);
+                            }}
+                            className="shrink-0 rounded-lg border border-white/10 px-2.5 py-1.5 text-[10px] text-white/40 transition hover:border-white/20 hover:text-white/70 disabled:opacity-35"
+                          >
+                            Comparar
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {versionDiffLoading && (
+                <div className="mt-4 rounded-xl border border-white/[0.07] bg-white/[0.015] px-4 py-5 text-center text-xs text-white/30">
+                  Comparando versões...
+                </div>
+              )}
+
+              {versionDiff && !versionDiffLoading && (
+                <div className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-black/15">
+                  <div className="border-b border-white/[0.07] px-4 py-3">
+                    <p className="text-[10px] uppercase tracking-[0.16em] text-white/20">
+                      Mudanças até a versão atual
+                    </p>
+                    <p className="mt-1 truncate text-xs text-white/40">
+                      comparado com {versionDiff.fromDeckName}
+                    </p>
+                  </div>
+
+                  <div className="grid gap-0 md:grid-cols-2">
+                    <div className="border-b border-white/[0.07] p-4 md:border-b-0 md:border-r">
+                      <p className="text-xs font-medium text-emerald-100/55">
+                        + Entraram
+                      </p>
+                      <div className="mt-3 max-h-48 space-y-1.5 overflow-y-auto">
+                        {versionDiff.added.length === 0 ? (
+                          <p className="text-[11px] text-white/20">Nenhuma.</p>
+                        ) : (
+                          versionDiff.added.map((line) => (
+                            <div
+                              key={`add:${line.name}:${line.board}`}
+                              className="flex items-center justify-between gap-3 text-[11px]"
+                            >
+                              <span className="truncate text-white/45">
+                                {line.name}
+                              </span>
+                              <span className="shrink-0 text-emerald-100/45">
+                                +{line.quantity}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="p-4">
+                      <p className="text-xs font-medium text-red-100/50">
+                        − Saíram
+                      </p>
+                      <div className="mt-3 max-h-48 space-y-1.5 overflow-y-auto">
+                        {versionDiff.removed.length === 0 ? (
+                          <p className="text-[11px] text-white/20">Nenhuma.</p>
+                        ) : (
+                          versionDiff.removed.map((line) => (
+                            <div
+                              key={`remove:${line.name}:${line.board}`}
+                              className="flex items-center justify-between gap-3 text-[11px]"
+                            >
+                              <span className="truncate text-white/45">
+                                {line.name}
+                              </span>
+                              <span className="shrink-0 text-red-100/40">
+                                −{line.quantity}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
