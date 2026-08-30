@@ -264,6 +264,22 @@ type DeckCardRow = {
   pending?: boolean;
 };
 
+type OwnedCollectionRow = {
+  scryfall_id: string;
+  oracle_id: string | null;
+  quantity: number;
+  collection_id: string;
+};
+
+function getCollectionMatchKey(row: {
+  scryfall_id: string;
+  oracle_id: string | null;
+}) {
+  return row.oracle_id
+    ? `oracle:${row.oracle_id}`
+    : `printing:${row.scryfall_id}`;
+}
+
 const updateDeckSectionOrder = [
   "Comandante",
   "Criaturas",
@@ -1012,6 +1028,12 @@ export default function DeckPage() {
   const [highlightedCardIndex, setHighlightedCardIndex] = useState(0);
   const [deckSearch, setDeckSearch] = useState("");
   const [deckCards, setDeckCards] = useState<DeckCardRow[]>([]);
+  const [viewerId, setViewerId] = useState<string | null>(null);
+  const [ownedCollectionByCard, setOwnedCollectionByCard] = useState<
+    Record<string, number>
+  >({});
+  const [collectionCoverageLoading, setCollectionCoverageLoading] =
+    useState(false);
   const [selectedCard, setSelectedCard] =
     useState<DeckCardRow | null>(null);
   const [selectedCardQuantity, setSelectedCardQuantity] =
@@ -2045,6 +2067,36 @@ export default function DeckPage() {
 
   const deckCardTotal = boardCounts.deck;
 
+  const collectionCoverage = useMemo(() => {
+    const requiredByCard = new Map<string, number>();
+
+    for (const row of primaryDeckCards) {
+      const key = getCollectionMatchKey(row);
+      requiredByCard.set(
+        key,
+        (requiredByCard.get(key) ?? 0) + Math.max(1, row.quantity)
+      );
+    }
+
+    let needed = 0;
+    let ownedTowardDeck = 0;
+    let missing = 0;
+
+    for (const [key, required] of requiredByCard.entries()) {
+      const owned = ownedCollectionByCard[key] ?? 0;
+      needed += required;
+      ownedTowardDeck += Math.min(owned, required);
+      missing += Math.max(0, required - owned);
+    }
+
+    return {
+      needed,
+      owned: ownedTowardDeck,
+      missing,
+      complete: needed > 0 && missing === 0,
+    };
+  }, [ownedCollectionByCard, primaryDeckCards]);
+
   const activeBoardRows = useMemo(() => {
     if (activeBoardTab === "sideboard") {
       return deckCards.filter((row) => row.board === "sideboard");
@@ -2815,10 +2867,86 @@ export default function DeckPage() {
   }, [cardSearch, supabase]);
 
   useEffect(() => {
+    if (!viewerId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadOwnedCollection() {
+      setCollectionCoverageLoading(true);
+
+      const { data: collectionRows, error: collectionsError } = await supabase
+        .from("user_collections")
+        .select("id")
+        .eq("owner_id", viewerId)
+        .eq("kind", "collection");
+
+      if (cancelled) return;
+
+      if (collectionsError) {
+        console.warn(
+          "Minha coleção ainda não está disponível para comparação:",
+          collectionsError.message
+        );
+        setOwnedCollectionByCard({});
+        setCollectionCoverageLoading(false);
+        return;
+      }
+
+      const collectionIds = (collectionRows ?? [])
+        .map((row) => (typeof row.id === "string" ? row.id : null))
+        .filter((id): id is string => Boolean(id));
+
+      if (collectionIds.length === 0) {
+        setOwnedCollectionByCard({});
+        setCollectionCoverageLoading(false);
+        return;
+      }
+
+      const { data: ownedRows, error: ownedError } = await supabase
+        .from("user_collection_cards")
+        .select("scryfall_id, oracle_id, quantity, collection_id")
+        .eq("owner_id", viewerId)
+        .in("collection_id", collectionIds);
+
+      if (cancelled) return;
+
+      if (ownedError) {
+        console.warn(
+          "Não foi possível comparar o deck com a coleção:",
+          ownedError.message
+        );
+        setOwnedCollectionByCard({});
+        setCollectionCoverageLoading(false);
+        return;
+      }
+
+      const totals: Record<string, number> = {};
+
+      for (const row of (ownedRows ?? []) as OwnedCollectionRow[]) {
+        const key = getCollectionMatchKey(row);
+        totals[key] = (totals[key] ?? 0) + Math.max(0, row.quantity);
+      }
+
+      setOwnedCollectionByCard(totals);
+      setCollectionCoverageLoading(false);
+    }
+
+    void loadOwnedCollection();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, viewerId]);
+
+  useEffect(() => {
     async function loadDeck() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
+
+      setViewerId(user?.id ?? null);
 
       const { data, error } = await supabase
         .from("decks")
@@ -4519,6 +4647,28 @@ export default function DeckPage() {
 
                   <span>•</span>
 
+                  <Link
+                    href="/colecao"
+                    title={
+                      collectionCoverageLoading
+                        ? "Comparando com sua coleção..."
+                        : collectionCoverage.missing > 0
+                          ? `${collectionCoverage.missing} carta(s) faltando na sua coleção`
+                          : "Você tem todas as cartas deste deck na sua coleção"
+                    }
+                    className={`rounded-full border px-2.5 py-1 text-[11px] transition ${
+                      collectionCoverage.complete
+                        ? "border-emerald-300/15 bg-emerald-300/[0.045] text-emerald-100/55 hover:border-emerald-300/30"
+                        : "border-white/10 bg-white/[0.025] text-white/35 hover:border-white/20 hover:text-white/60"
+                    }`}
+                  >
+                    {collectionCoverageLoading
+                      ? "Minha coleção…"
+                      : `Tenho ${collectionCoverage.owned}/${collectionCoverage.needed}`}
+                  </Link>
+
+                  <span>•</span>
+
                   <div ref={problemsMenuRef} className="relative">
                     {deckStats.problems.length === 0 ? (
                       <span
@@ -5807,6 +5957,27 @@ export default function DeckPage() {
                                       >
                                         {row.quantity}
                                       </span>
+
+                                      {viewerId && (() => {
+                                        const owned =
+                                          ownedCollectionByCard[
+                                            getCollectionMatchKey(row)
+                                          ] ?? 0;
+                                        const enough = owned >= row.quantity;
+
+                                        return (
+                                          <span
+                                            title={`Tenho ${owned} / Preciso ${row.quantity}`}
+                                            className={`absolute bottom-1.5 left-1.5 z-10 rounded-md border bg-black/80 px-1.5 py-0.5 text-[9px] font-semibold backdrop-blur-sm ${
+                                              enough
+                                                ? "border-emerald-300/20 text-emerald-100/65"
+                                                : "border-amber-300/20 text-amber-100/65"
+                                            }`}
+                                          >
+                                            {owned}/{row.quantity}
+                                          </span>
+                                        );
+                                      })()}
 
                                       {/* CONTROLES NO HOVER */}
                                       <div

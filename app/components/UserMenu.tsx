@@ -1,71 +1,87 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+/* eslint-disable @next/next/no-img-element */
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+
 import { createClient } from "../../lib/supabase/client";
 
 type Profile = {
-  nickname: string;
+  nickname: string | null;
   avatar_url: string | null;
 };
 
 export default function UserMenu() {
+  const router = useRouter();
   const [supabase] = useState(() => createClient());
-
-  const [nickname, setNickname] = useState<string | null>(null);
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState(false);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
 
+  const [open, setOpen] = useState(false);
+
+  const [userId, setUserId] = useState<string | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+
+  const [loading, setLoading] = useState(true);
+  const [signingOut, setSigningOut] = useState(false);
+
   useEffect(() => {
+    let cancelled = false;
+
     async function loadUser() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
+      if (cancelled) return;
+
       if (!user) {
-        setLoggedIn(false);
-        setNickname(null);
-        setAvatarUrl(null);
+        setUserId(null);
+        setProfile(null);
         setLoading(false);
         return;
       }
 
-      setLoggedIn(true);
+      setUserId(user.id);
 
-      const { data: profile, error } = await supabase
+      const { data, error } = await supabase
         .from("profiles")
         .select("nickname, avatar_url")
         .eq("id", user.id)
-        .maybeSingle<Profile>();
+        .maybeSingle();
+
+      if (cancelled) return;
 
       if (error) {
-        console.error("Erro ao carregar perfil:", error);
+        console.error(
+          "Erro ao carregar perfil no menu:",
+          error
+        );
+
+        setProfile(null);
+        setLoading(false);
+        return;
       }
 
-      setNickname(profile?.nickname ?? null);
-      setAvatarUrl(profile?.avatar_url ?? null);
+      setProfile((data ?? null) as Profile | null);
       setLoading(false);
     }
 
-    loadUser();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
-      loadUser();
-    });
+    void loadUser();
 
     return () => {
-      subscription.unsubscribe();
+      cancelled = true;
     };
   }, [supabase]);
 
   useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
+    function handlePointerDown(event: PointerEvent) {
       if (
         menuRef.current &&
         !menuRef.current.contains(event.target as Node)
@@ -74,195 +90,301 @@ export default function UserMenu() {
       }
     }
 
-    document.addEventListener("mousedown", handleClickOutside);
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener(
+      "pointerdown",
+      handlePointerDown
+    );
+
+    document.addEventListener(
+      "keydown",
+      handleKeyDown
+    );
 
     return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener(
+        "pointerdown",
+        handlePointerDown
+      );
+
+      document.removeEventListener(
+        "keydown",
+        handleKeyDown
+      );
     };
   }, []);
 
-  async function handleLogout() {
-    await supabase.auth.signOut();
-    window.location.href = "/";
+  async function handleSignOut() {
+    if (signingOut) return;
+
+    setSigningOut(true);
+    setOpen(false);
+
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      console.error("Erro ao sair:", error);
+      setSigningOut(false);
+      return;
+    }
+
+    router.push("/");
+    router.refresh();
   }
 
   if (loading) {
-    return <div className="h-10 w-10" />;
-  }
-
-  if (!loggedIn) {
     return (
-      <div className="flex items-center gap-3">
-        <a
-          href="/auth/login"
-          className="hidden px-4 py-2 text-sm text-white/70 transition hover:text-white sm:block"
-        >
-          Entrar
-        </a>
-
-        <a
-          href="/auth/register"
-          className="rounded-lg bg-[#f4f1e8] px-4 py-2 text-sm font-semibold text-black transition hover:bg-white"
-        >
-          Criar conta
-        </a>
-      </div>
+      <div
+        className="
+          h-10 w-10
+          animate-pulse
+          rounded-full
+          border border-white/10
+          bg-white/[0.04]
+        "
+      />
     );
   }
 
-  const initial = nickname
-    ? nickname.charAt(0).toUpperCase()
-    : "?";
+  if (!userId) {
+    return (
+      <Link
+        href="/auth/login"
+        className="
+          rounded-lg
+          border border-white/15
+          px-4 py-2
+          text-sm text-white/60
+          transition
+          hover:border-white/30
+          hover:text-white
+        "
+      >
+        Entrar
+      </Link>
+    );
+  }
+
+  const nickname = profile?.nickname?.trim() || "usuário";
+
+  const initial =
+    nickname.charAt(0).toUpperCase() || "?";
 
   return (
     <div
       ref={menuRef}
-      className="relative"
+      className="relative z-[100]"
     >
-      {/* AVATAR DO HEADER */}
+      {/* BOTÃO DO AVATAR */}
       <button
         type="button"
-        onClick={() => setOpen((value) => !value)}
         aria-label="Abrir menu do usuário"
         aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
         className="
           flex h-10 w-10
           items-center justify-center
           overflow-hidden
           rounded-full
           border border-white/15
-          bg-white/[0.05]
+          bg-[#f4f1e8]
           text-sm font-semibold
-          text-[#f4f1e8]
+          text-black
+          shadow-lg shadow-black/20
           transition
-          hover:border-white/30
-          hover:bg-white/[0.08]
-          active:scale-95
+          hover:scale-[1.04]
+          hover:border-white/35
         "
       >
-        {avatarUrl ? (
+        {profile?.avatar_url ? (
           <img
-            src={avatarUrl}
-            alt={nickname ? `Foto de @${nickname}` : "Foto de perfil"}
-            className="h-full w-full object-cover object-center"
+            src={profile.avatar_url}
+            alt={`Avatar de @${nickname}`}
+            className="
+              h-full w-full
+              object-cover object-center
+            "
           />
         ) : (
-          <span>{initial}</span>
+          initial
         )}
       </button>
 
-      {/* DROPDOWN */}
-      <div
-  className={`
-    absolute right-0 top-12 z-50
-    w-64
-    origin-top-right
-    overflow-hidden
-    rounded-xl
-    border border-white/10
-    bg-[#111113]
-    shadow-2xl
-
-    transition-all
-    duration-500
-    ease-out
-
-    ${
-      open
-        ? "pointer-events-auto translate-y-0 scale-100 opacity-100"
-        : "pointer-events-none -translate-y-2 scale-95 opacity-0"
-    }
-  `}
->
-          {/* USUÁRIO */}
-          <div className="flex items-center gap-3 border-b border-white/10 px-4 py-4">
+      {/* MENU */}
+      {open && (
+        <div
+          className="
+            absolute
+            right-0 top-[calc(100%+12px)]
+            w-[255px]
+            overflow-hidden
+            rounded-xl
+            border border-white/15
+            bg-[#121214]
+            text-[#f4f1e8]
+            shadow-2xl shadow-black/50
+          "
+        >
+          {/* CABEÇALHO */}
+          <Link
+            href="/perfil"
+            onClick={() => setOpen(false)}
+            className="
+              flex items-center gap-3
+              border-b border-white/10
+              px-5 py-4
+              transition
+              hover:bg-white/[0.03]
+            "
+          >
             <div
               className="
-                flex h-10 w-10 shrink-0
+                flex h-10 w-10
+                shrink-0
                 items-center justify-center
                 overflow-hidden
                 rounded-full
-                border border-white/10
-                bg-white/[0.05]
+                border border-white/15
+                bg-[#f4f1e8]
                 text-sm font-semibold
+                text-black
               "
             >
-              {avatarUrl ? (
+              {profile?.avatar_url ? (
                 <img
-                  src={avatarUrl}
-                  alt={nickname ? `Foto de @${nickname}` : "Foto de perfil"}
-                  className="h-full w-full object-cover object-center"
+                  src={profile.avatar_url}
+                  alt={`Avatar de @${nickname}`}
+                  className="
+                    h-full w-full
+                    object-cover object-center
+                  "
                 />
               ) : (
-                <span>{initial}</span>
+                initial
               )}
             </div>
 
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-[#f4f1e8]">
-                {nickname ? `@${nickname}` : "Meu perfil"}
+              <p
+                className="
+                  truncate
+                  text-sm font-semibold
+                  text-white/90
+                "
+              >
+                @{nickname}
               </p>
 
-              <p className="mt-0.5 text-xs text-white/35">
+              <p
+                className="
+                  mt-0.5
+                  text-xs
+                  text-white/30
+                "
+              >
                 Conta CurveOut
               </p>
             </div>
-          </div>
+          </Link>
 
-          {/* MENU */}
-          <div className="p-2">
-            <a
+          {/* LINKS */}
+          <nav className="py-2">
+            <MenuLink
               href="/perfil"
               onClick={() => setOpen(false)}
-              className="block rounded-lg px-3 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.06] hover:text-white"
             >
               Perfil
-            </a>
+            </MenuLink>
 
-            <a
+            <MenuLink
               href="/decks/novo"
               onClick={() => setOpen(false)}
-              className="block rounded-lg px-3 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.06] hover:text-white"
             >
               Criar deck
-            </a>
+            </MenuLink>
 
-            <a
+            <MenuLink
               href="/meus-decks"
               onClick={() => setOpen(false)}
-              className="block rounded-lg px-3 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.06] hover:text-white"
             >
               Meus decks
-            </a>
+            </MenuLink>
 
-            <a
-              href="/minha-colecao"
+            <MenuLink
+              href="/colecao"
               onClick={() => setOpen(false)}
-              className="block rounded-lg px-3 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.06] hover:text-white"
             >
               Minha coleção
-            </a>
+            </MenuLink>
 
-            <a
+            <MenuLink
               href="/configuracoes"
               onClick={() => setOpen(false)}
-              className="block rounded-lg px-3 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.06] hover:text-white"
             >
               Configurações
-            </a>
-          </div>
+            </MenuLink>
+          </nav>
 
           {/* SAIR */}
           <div className="border-t border-white/10 p-2">
             <button
               type="button"
-              onClick={handleLogout}
-              className="w-full rounded-lg px-3 py-2.5 text-left text-sm text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
+              disabled={signingOut}
+              onClick={() => {
+                void handleSignOut();
+              }}
+              className="
+                w-full
+                rounded-lg
+                px-3 py-3
+                text-left
+                text-sm
+                text-red-300/85
+                transition
+                hover:bg-red-300/[0.06]
+                hover:text-red-200
+                disabled:cursor-wait
+                disabled:opacity-40
+              "
             >
-              Sair
+              {signingOut ? "Saindo..." : "Sair"}
             </button>
           </div>
         </div>
+      )}
     </div>
+  );
+}
+
+function MenuLink({
+  href,
+  children,
+  onClick,
+}: {
+  href: string;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <Link
+      href={href}
+      onClick={onClick}
+      className="
+        block w-full
+        px-5 py-3
+        text-sm
+        text-white/65
+        transition
+        hover:bg-white/[0.045]
+        hover:text-white
+      "
+    >
+      {children}
+    </Link>
   );
 }

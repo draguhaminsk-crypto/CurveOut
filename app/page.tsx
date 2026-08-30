@@ -1,7 +1,9 @@
+import Link from "next/link";
 import { Cinzel } from "next/font/google";
 
 import CommanderPrintCarousel from "./components/CommanderPrintCarousel";
 import type { CommanderPrint } from "./components/CommanderPrintCarousel";
+import UserMenu from "./components/UserMenu";
 
 const cinzel = Cinzel({
   subsets: ["latin"],
@@ -48,11 +50,6 @@ type Commander = {
   }[];
 };
 
-const scryfallHeaders = {
-  Accept: "application/json;q=0.9,*/*;q=0.8",
-  "User-Agent": "CurveOut/0.1",
-};
-
 function getCardImage(card: Commander) {
   return (
     card.image_uris?.large ??
@@ -62,113 +59,35 @@ function getCardImage(card: Commander) {
   );
 }
 
-async function getRandomCommander(): Promise<Commander | null> {
+type CommanderProxyResponse = {
+  commander: Commander;
+  prints: CommanderPrint[];
+};
+
+async function getCommanderData(): Promise<CommanderProxyResponse | null> {
   try {
-    const ptResponse = await fetch(
-      "https://api.scryfall.com/cards/random?q=is%3Acommander+lang%3Apt",
+    const response = await fetch(
+      "https://curveout.com.br/api/scryfall/commander",
       {
         cache: "no-store",
-        headers: scryfallHeaders,
       }
     );
 
-    if (ptResponse.ok) {
-      return ptResponse.json();
-    }
-
-    const enResponse = await fetch(
-      "https://api.scryfall.com/cards/random?q=is%3Acommander",
-      {
-        cache: "no-store",
-        headers: scryfallHeaders,
-      }
-    );
-
-    if (!enResponse.ok) {
+    if (!response.ok) {
       return null;
     }
 
-    return enResponse.json();
+    return response.json();
   } catch {
     return null;
   }
 }
 
-async function getCommanderPrints(
-  commander: Commander
-): Promise<CommanderPrint[]> {
-  const currentImage = getCardImage(commander);
-
-  const currentPrint: CommanderPrint | null = currentImage
-    ? {
-        id: commander.id,
-        set: commander.set,
-        set_name: commander.set_name,
-        released_at: commander.released_at,
-        image: currentImage,
-      }
-    : null;
-
-  if (!commander.prints_search_uri) {
-    return currentPrint ? [currentPrint] : [];
-  }
-
-  try {
-    const response = await fetch(commander.prints_search_uri, {
-      headers: scryfallHeaders,
-      next: {
-        revalidate: 3600,
-      },
-    });
-
-    if (!response.ok) {
-      return currentPrint ? [currentPrint] : [];
-    }
-
-    const result: {
-      data: Commander[];
-    } = await response.json();
-
-    const otherPrints = result.data
-      .map((card) => {
-        const image = getCardImage(card);
-
-        if (!image) {
-          return null;
-        }
-
-        return {
-          id: card.id,
-          set: card.set,
-          set_name: card.set_name,
-          released_at: card.released_at,
-          image,
-        };
-      })
-      .filter((print) => print !== null) as CommanderPrint[];
-
-    const allPrints = currentPrint
-      ? [currentPrint, ...otherPrints]
-      : otherPrints;
-
-    const uniquePrints = Array.from(
-      new Map(
-        allPrints.map((print) => [print.id, print])
-      ).values()
-    );
-
-    return uniquePrints.slice(0, 12);
-  } catch {
-    return currentPrint ? [currentPrint] : [];
-  }
-}
-
 export default async function Home() {
-  const commander = await getRandomCommander();
+  const commanderData = await getCommanderData();
 
-  const commanderPrints = commander
-    ? await getCommanderPrints(commander)
-    : [];
+  const commander = commanderData?.commander ?? null;
+  const commanderPrints = commanderData?.prints ?? [];
 
   const commanderName =
     commander?.printed_name ??
@@ -202,43 +121,44 @@ export default async function Home() {
   return (
     <div className="min-h-screen bg-[#0b0b0d] text-[#f4f1e8]">
       <header className="flex h-20 items-center justify-between border-b border-white/10 px-6 md:px-10">
-        <a
+        <Link
           href="/"
           className={`${cinzel.className} text-2xl font-bold uppercase tracking-[0.015em]`}
         >
           CurveOut
-        </a>
+        </Link>
 
-        <nav className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-8 text-sm md:flex">
-          <a
+        <nav className="hidden items-center gap-8 text-sm text-white/65 md:flex">
+          <Link
             href="/decks"
             className="transition hover:text-white"
           >
             Decks
-          </a>
+          </Link>
 
-          <a
+          <Link
             href="/cartas"
             className="transition hover:text-white"
           >
             Cartas
-          </a>
+          </Link>
 
-          <a
-            href="/colecoes"
+          <Link
+            href="/colecao"
             className="transition hover:text-white"
           >
             Coleções
-          </a>
+          </Link>
 
-          <a
-            href="/explorar"
+          <Link
+            href="/usuarios"
             className="transition hover:text-white"
           >
             Explorar
-          </a>
+          </Link>
         </nav>
 
+        <UserMenu />
       </header>
 
       <main>
@@ -274,13 +194,19 @@ export default async function Home() {
             </h1>
 
             <div className="mt-10 flex flex-wrap justify-center gap-3">
-              <button className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white">
+              <Link
+                href="/decks/novo"
+                className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white"
+              >
                 Criar meu deck
-              </button>
+              </Link>
 
-              <button className="rounded-lg border border-white/15 px-6 py-3 font-medium text-white/75 transition hover:border-white/30 hover:text-white">
+              <Link
+                href="/decks"
+                className="rounded-lg border border-white/15 px-6 py-3 font-medium text-white/75 transition hover:border-white/30 hover:text-white"
+              >
                 Explorar decks
-              </button>
+              </Link>
             </div>
           </div>
         </section>
@@ -337,9 +263,12 @@ export default async function Home() {
                   )}
 
                   <div className="mt-8 flex flex-wrap gap-3">
-                    <button className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white">
+                    <Link
+                      href="/decks/novo"
+                      className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white"
+                    >
                       Criar deck com este comandante
-                    </button>
+                    </Link>
 
                     <a
                       href={ligaMagicUrl}
@@ -365,12 +294,12 @@ export default async function Home() {
         <div className="mx-auto max-w-7xl">
           <div className="grid gap-10 md:grid-cols-[1.2fr_1fr] md:items-start">
             <div>
-              <a
+              <Link
                 href="/"
                 className={`${cinzel.className} text-2xl font-bold uppercase tracking-[0.015em]`}
               >
                 CurveOut
-              </a>
+              </Link>
 
               <p className="mt-3 max-w-sm text-sm leading-6 text-white/40">
                 Construa, ajuste e compartilhe seus decks.
@@ -384,18 +313,18 @@ export default async function Home() {
                 </p>
 
                 <div className="flex flex-col gap-2.5 text-white/50">
-                  <a href="/decks" className="transition hover:text-white">
+                  <Link href="/decks" className="transition hover:text-white">
                     Decks
-                  </a>
-                  <a href="/cartas" className="transition hover:text-white">
+                  </Link>
+                  <Link href="/cartas" className="transition hover:text-white">
                     Cartas
-                  </a>
-                  <a href="/colecoes" className="transition hover:text-white">
+                  </Link>
+                  <Link href="/colecao" className="transition hover:text-white">
                     Coleções
-                  </a>
-                  <a href="/explorar" className="transition hover:text-white">
+                  </Link>
+                  <Link href="/usuarios" className="transition hover:text-white">
                     Explorar
-                  </a>
+                  </Link>
                 </div>
               </div>
 
@@ -405,15 +334,15 @@ export default async function Home() {
                 </p>
 
                 <div className="flex flex-col gap-2.5 text-white/50">
-                  <a href="/perfil" className="transition hover:text-white">
+                  <Link href="/perfil" className="transition hover:text-white">
                     Perfil
-                  </a>
-                  <a href="/meus-decks" className="transition hover:text-white">
+                  </Link>
+                  <Link href="/meus-decks" className="transition hover:text-white">
                     Meus decks
-                  </a>
-                  <a href="/decks/novo" className="transition hover:text-white">
+                  </Link>
+                  <Link href="/decks/novo" className="transition hover:text-white">
                     Criar deck
-                  </a>
+                  </Link>
                 </div>
               </div>
 
@@ -429,12 +358,12 @@ export default async function Home() {
                   >
                     Contato
                   </a>
-                  <a href="/termos" className="transition hover:text-white">
+                  <Link href="/termos" className="transition hover:text-white">
                     Termos
-                  </a>
-                  <a href="/privacidade" className="transition hover:text-white">
+                  </Link>
+                  <Link href="/privacidade" className="transition hover:text-white">
                     Privacidade
-                  </a>
+                  </Link>
                 </div>
               </div>
             </div>

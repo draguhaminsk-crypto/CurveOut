@@ -58,6 +58,7 @@ export default function UsersPage() {
           .from("profiles")
           .select("id, nickname, bio, avatar_url")
           .neq("id", user.id)
+          .eq("discoverable", true)
           .order("nickname", { ascending: true })
           .limit(40);
 

@@ -168,6 +168,17 @@ export default function NovoDeckPage() {
         return;
       }
 
+      const { data: preferences, error: preferencesError } =
+        await supabase
+          .from("profiles")
+          .select("default_deck_public")
+          .eq("id", user.id)
+          .maybeSingle();
+
+      if (!preferencesError && preferences) {
+        setIsPublic(preferences.default_deck_public ?? true);
+      }
+
       setCheckingUser(false);
     }
 

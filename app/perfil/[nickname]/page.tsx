@@ -13,6 +13,7 @@ type PublicProfile = {
   bio: string | null;
   avatar_url: string | null;
   favorite_card_printing_id: string | null;
+  created_at: string | null;
 };
 
 type PublicDeck = {
@@ -30,6 +31,86 @@ type SocialProfile = {
 };
 
 type SocialModalMode = "followers" | "following";
+
+type PublicDeckCardRow = {
+  deck_id: string;
+  scryfall_id: string;
+  quantity: number;
+  board: string;
+};
+
+type PublicColorCardRow = {
+  scryfall_id: string;
+  color_identity: unknown;
+};
+
+
+type ManaColor = "W" | "U" | "B" | "R" | "G";
+
+type ColorStat = {
+  color: ManaColor;
+  count: number;
+};
+
+const manaColorMeta: Record<
+  ManaColor,
+  { label: string; className: string }
+> = {
+  W: {
+    label: "Branco",
+    className: "border-[#f5e7b8]/25 bg-[#f5e7b8]/10 text-[#f7edcf]/80",
+  },
+  U: {
+    label: "Azul",
+    className: "border-sky-300/20 bg-sky-300/[0.07] text-sky-100/75",
+  },
+  B: {
+    label: "Preto",
+    className: "border-violet-300/15 bg-violet-300/[0.06] text-violet-100/65",
+  },
+  R: {
+    label: "Vermelho",
+    className: "border-red-300/20 bg-red-300/[0.07] text-red-100/70",
+  },
+  G: {
+    label: "Verde",
+    className: "border-emerald-300/20 bg-emerald-300/[0.07] text-emerald-100/70",
+  },
+};
+
+function normalizeColorIdentity(value: unknown): ManaColor[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.filter(
+    (color): color is ManaColor =>
+      typeof color === "string" &&
+      ["W", "U", "B", "R", "G"].includes(color)
+  );
+}
+
+function formatCurveOutSince(value: string | null) {
+  if (!value) return null;
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return null;
+
+  return new Intl.DateTimeFormat("pt-BR", {
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
+function chunk<T>(values: T[], size: number) {
+  const result: T[][] = [];
+
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+
+  return result;
+}
+
 
 function formatRelativeDate(value: string) {
   const timestamp = new Date(value).getTime();
@@ -61,6 +142,8 @@ export default function PublicProfilePage() {
   const [followingCount, setFollowingCount] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followSaving, setFollowSaving] = useState(false);
+  const [favoriteColors, setFavoriteColors] = useState<ColorStat[]>([]);
+  const [mutualFollowers, setMutualFollowers] = useState<SocialProfile[]>([]);
 
   const [socialModal, setSocialModal] =
     useState<SocialModalMode | null>(null);
@@ -94,7 +177,7 @@ export default function PublicProfilePage() {
       const { data: targetProfile, error: profileError } = await supabase
         .from("profiles")
         .select(
-          "id, nickname, bio, avatar_url, favorite_card_printing_id"
+          "id, nickname, bio, avatar_url, favorite_card_printing_id, created_at"
         )
         .ilike("nickname", nickname)
         .maybeSingle();
@@ -122,6 +205,8 @@ export default function PublicProfilePage() {
         { count: followingTotal, error: followingError },
         { data: followRow, error: followError },
         { data: publicDecks, error: decksError },
+        { data: viewerFollowingRows, error: viewerFollowingError },
+        { data: targetFollowerRows, error: targetFollowersError },
       ] = await Promise.all([
         supabase
           .from("profile_follows")
@@ -144,6 +229,14 @@ export default function PublicProfilePage() {
           .eq("is_public", true)
           .order("updated_at", { ascending: false })
           .limit(6),
+        supabase
+          .from("profile_follows")
+          .select("following_id")
+          .eq("follower_id", user.id),
+        supabase
+          .from("profile_follows")
+          .select("follower_id")
+          .eq("following_id", publicProfile.id),
       ]);
 
       if (cancelled) return;
@@ -152,11 +245,151 @@ export default function PublicProfilePage() {
       if (!followingError) setFollowingCount(followingTotal ?? 0);
       if (!followError) setIsFollowing(Boolean(followRow));
 
+      const visibleDecks = decksError
+        ? []
+        : ((publicDecks ?? []) as PublicDeck[]);
+
       if (decksError) {
         console.warn("Não foi possível carregar decks públicos:", decksError);
-        setDecks([]);
+      }
+
+      setDecks(visibleDecks);
+
+      if (visibleDecks.length > 0) {
+        const deckIds = visibleDecks.map((deck) => deck.id);
+
+        const { data: deckCardRows, error: deckCardsError } = await supabase
+          .from("deck_cards")
+          .select("deck_id, scryfall_id, quantity, board")
+          .in("deck_id", deckIds);
+
+        if (cancelled) return;
+
+        if (deckCardsError) {
+          console.warn(
+            "Não foi possível calcular as cores do perfil:",
+            deckCardsError.message
+          );
+          setFavoriteColors([]);
+        } else {
+          const playableRows = ((deckCardRows ?? []) as PublicDeckCardRow[]).filter(
+            (row) => row.board === "mainboard" || row.board === "commander"
+          );
+
+          const scryfallIds = Array.from(
+            new Set(playableRows.map((row) => row.scryfall_id).filter(Boolean))
+          );
+
+          const colorCards: PublicColorCardRow[] = [];
+
+          for (const idChunk of chunk(scryfallIds, 100)) {
+            const { data: colorRows, error: colorError } = await supabase
+              .from("cards")
+              .select("scryfall_id, color_identity")
+              .in("scryfall_id", idChunk);
+
+            if (colorError) {
+              console.warn(
+                "Não foi possível ler as cores das cartas:",
+                colorError.message
+              );
+              continue;
+            }
+
+            colorCards.push(...((colorRows ?? []) as PublicColorCardRow[]));
+          }
+
+          const colorsByScryfall = new Map(
+            colorCards.map((card) => [
+              card.scryfall_id,
+              normalizeColorIdentity(card.color_identity),
+            ])
+          );
+
+          const totals: Record<ManaColor, number> = {
+            W: 0,
+            U: 0,
+            B: 0,
+            R: 0,
+            G: 0,
+          };
+
+          for (const row of playableRows) {
+            const quantity = Math.max(1, Number(row.quantity) || 1);
+            const identity = colorsByScryfall.get(row.scryfall_id) ?? [];
+
+            for (const color of identity) {
+              totals[color] += quantity;
+            }
+          }
+
+          setFavoriteColors(
+            (Object.entries(totals) as Array<[ManaColor, number]>)
+              .filter(([, count]) => count > 0)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 3)
+              .map(([color, count]) => ({ color, count }))
+          );
+        }
       } else {
-        setDecks((publicDecks ?? []) as PublicDeck[]);
+        setFavoriteColors([]);
+      }
+
+      if (!viewerFollowingError && !targetFollowersError) {
+        const viewerFollowingIds = new Set(
+          (viewerFollowingRows ?? [])
+            .map((row) =>
+              typeof row.following_id === "string"
+                ? row.following_id
+                : null
+            )
+            .filter((value): value is string => Boolean(value))
+        );
+
+        const mutualIds = Array.from(
+          new Set(
+            (targetFollowerRows ?? [])
+              .map((row) =>
+                typeof row.follower_id === "string"
+                  ? row.follower_id
+                  : null
+              )
+              .filter(
+  (value): value is string =>
+    typeof value === "string" &&
+    viewerFollowingIds.has(value)
+)
+          )
+        ).slice(0, 8);
+
+        if (mutualIds.length > 0) {
+          const { data: mutualProfileRows, error: mutualProfilesError } =
+            await supabase
+              .from("profiles")
+              .select("id, nickname, avatar_url, bio")
+              .in("id", mutualIds);
+
+          if (!mutualProfilesError) {
+            const byId = new Map(
+              ((mutualProfileRows ?? []) as SocialProfile[]).map((item) => [
+                item.id,
+                item,
+              ])
+            );
+
+            setMutualFollowers(
+              mutualIds
+                .map((id) => byId.get(id))
+                .filter((item): item is SocialProfile => Boolean(item))
+            );
+          } else {
+            setMutualFollowers([]);
+          }
+        } else {
+          setMutualFollowers([]);
+        }
+      } else {
+        setMutualFollowers([]);
       }
 
       setLoading(false);
@@ -340,6 +573,15 @@ export default function PublicProfilePage() {
                 @{profile.nickname}
               </h1>
 
+              {formatCurveOutSince(profile.created_at) && (
+                <p className="mt-2 text-xs text-white/25">
+                  No CurveOut desde{" "}
+                  <span className="text-white/40">
+                    {formatCurveOutSince(profile.created_at)}
+                  </span>
+                </p>
+              )}
+
               <p className="mt-5 max-w-2xl whitespace-pre-line leading-7 text-white/50">
                 {profile.bio || "Este usuário ainda não adicionou uma bio."}
               </p>
@@ -369,6 +611,69 @@ export default function PublicProfilePage() {
                   </span>
                 </button>
               </div>
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <span className="mr-1 text-[10px] uppercase tracking-[0.16em] text-white/20">
+                  Cores mais usadas
+                </span>
+
+                {favoriteColors.length === 0 ? (
+                  <span className="text-xs text-white/20">—</span>
+                ) : (
+                  favoriteColors.map(({ color }) => {
+                    const meta = manaColorMeta[color];
+
+                    return (
+                      <span
+                        key={color}
+                        title={meta.label}
+                        className={`
+                          flex h-7 min-w-7 items-center justify-center
+                          rounded-full border px-2
+                          text-[10px] font-semibold
+                          ${meta.className}
+                        `}
+                      >
+                        {color}
+                      </span>
+                    );
+                  })
+                )}
+              </div>
+
+              {!ownProfile && mutualFollowers.length > 0 && (
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <div className="flex -space-x-2">
+                    {mutualFollowers.slice(0, 3).map((item) => (
+                      <Link
+                        key={item.id}
+                        href={`/perfil/${encodeURIComponent(item.nickname)}`}
+                        title={`@${item.nickname}`}
+                        className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border-2 border-[#0b0b0d] bg-[#151518] text-[10px] font-semibold text-white/65"
+                      >
+                        {item.avatar_url ? (
+                          <img
+                            src={item.avatar_url}
+                            alt={`Foto de @${item.nickname}`}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          item.nickname.charAt(0).toUpperCase()
+                        )}
+                      </Link>
+                    ))}
+                  </div>
+
+                  <p className="text-xs text-white/30">
+                    <span className="text-white/50">
+                      {mutualFollowers.length}
+                    </span>{" "}
+                    {mutualFollowers.length === 1
+                      ? "seguidor em comum"
+                      : "seguidores em comum"}
+                  </p>
+                </div>
+              )}
 
               {errorMessage && (
                 <p className="mt-4 text-sm text-red-100/55">
