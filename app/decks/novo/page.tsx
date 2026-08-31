@@ -186,6 +186,151 @@ export default function NovoDeckPage() {
   }, [router, supabase]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadCommanderFromUrl() {
+      const searchParams = new URLSearchParams(window.location.search);
+      const commanderId = searchParams.get("commander");
+
+      if (!commanderId) {
+        return;
+      }
+
+      setCommanderLoading(true);
+      setCommanderError("");
+
+      const { data, error } = await supabase
+        .from("cards")
+        .select(
+          "scryfall_id, oracle_id, name, type_line, mana_cost, image_uri, image_uri_large, card_data"
+        )
+        .eq("scryfall_id", commanderId)
+        .maybeSingle();
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        console.error(
+          "Erro ao carregar comandante selecionado na Home:",
+          error
+        );
+        setCommanderError(
+          "Não foi possível carregar o comandante selecionado."
+        );
+        setCommanderLoading(false);
+        return;
+      }
+
+      if (!data) {
+        setCommanderError(
+          "O comandante selecionado não foi encontrado na base do CurveOut."
+        );
+        setCommanderLoading(false);
+        return;
+      }
+
+      const cardData =
+        typeof data.card_data === "object" &&
+        data.card_data !== null &&
+        !Array.isArray(data.card_data)
+          ? (data.card_data as Record<string, unknown>)
+          : {};
+
+      const cardFaces =
+        Array.isArray(cardData.card_faces)
+          ? cardData.card_faces
+              .map((face) => {
+                if (
+                  typeof face !== "object" ||
+                  face === null ||
+                  Array.isArray(face)
+                ) {
+                  return null;
+                }
+
+                const faceRecord = face as Record<string, unknown>;
+
+                const imageUris =
+                  typeof faceRecord.image_uris === "object" &&
+                  faceRecord.image_uris !== null &&
+                  !Array.isArray(faceRecord.image_uris)
+                    ? (faceRecord.image_uris as Record<string, unknown>)
+                    : {};
+
+                return {
+                  name:
+                    typeof faceRecord.name === "string"
+                      ? faceRecord.name
+                      : undefined,
+                  image_uris: {
+                    normal:
+                      typeof imageUris.normal === "string"
+                        ? imageUris.normal
+                        : undefined,
+                    large:
+                      typeof imageUris.large === "string"
+                        ? imageUris.large
+                        : undefined,
+                  },
+                } satisfies ScryfallCardFace;
+              })
+              .filter(
+                (face): face is ScryfallCardFace =>
+                  face !== null
+              )
+          : undefined;
+
+      const commander: ScryfallCard = {
+        id: data.scryfall_id,
+        oracle_id: data.oracle_id ?? undefined,
+        name: data.name,
+        type_line: data.type_line ?? undefined,
+        mana_cost: data.mana_cost ?? undefined,
+        set:
+          typeof cardData.set === "string"
+            ? cardData.set
+            : undefined,
+        set_name:
+          typeof cardData.set_name === "string"
+            ? cardData.set_name
+            : undefined,
+        collector_number:
+          typeof cardData.collector_number === "string"
+            ? cardData.collector_number
+            : undefined,
+        lang:
+          typeof cardData.lang === "string"
+            ? cardData.lang
+            : "en",
+        released_at:
+          typeof cardData.released_at === "string"
+            ? cardData.released_at
+            : undefined,
+        image_uris: {
+          normal: data.image_uri ?? undefined,
+          large: data.image_uri_large ?? undefined,
+        },
+        card_faces: cardFaces,
+      };
+
+      setFormat("Commander");
+      setSelectedCommander(commander);
+      setCommanderSearch(commander.name);
+      setCommanderResults([]);
+      setCommanderError("");
+      setCommanderLoading(false);
+    }
+
+    void loadCommanderFromUrl();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
+
+  useEffect(() => {
     if (format !== "Commander") return;
 
     const query = commanderSearch.trim();

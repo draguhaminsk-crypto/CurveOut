@@ -3,7 +3,6 @@ import { Cinzel } from "next/font/google";
 
 import CommanderPrintCarousel from "./components/CommanderPrintCarousel";
 import type { CommanderPrint } from "./components/CommanderPrintCarousel";
-import UserMenu from "./components/UserMenu";
 
 const cinzel = Cinzel({
   subsets: ["latin"],
@@ -120,7 +119,7 @@ export default async function Home() {
 
   return (
     <div className="min-h-screen bg-[#0b0b0d] text-[#f4f1e8]">
-      <header className="flex h-20 items-center justify-between border-b border-white/10 px-6 md:px-10">
+      <header className="relative flex h-20 items-center border-b border-white/10 px-6 md:px-10">
         <Link
           href="/"
           className={`${cinzel.className} text-2xl font-bold uppercase tracking-[0.015em]`}
@@ -128,7 +127,7 @@ export default async function Home() {
           CurveOut
         </Link>
 
-        <nav className="hidden items-center gap-8 text-sm text-white/65 md:flex">
+        <nav className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-8 text-sm text-white/65 md:flex">
           <Link
             href="/decks"
             className="transition hover:text-white"
@@ -157,8 +156,6 @@ export default async function Home() {
             Explorar
           </Link>
         </nav>
-
-        <UserMenu />
       </header>
 
       <main>
@@ -264,7 +261,9 @@ export default async function Home() {
 
                   <div className="mt-8 flex flex-wrap gap-3">
                     <Link
-                      href="/decks/novo"
+                      href={`/decks/novo?commander=${encodeURIComponent(
+                        commander.id
+                      )}`}
                       className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white"
                     >
                       Criar deck com este comandante
