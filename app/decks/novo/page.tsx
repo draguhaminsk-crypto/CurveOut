@@ -238,48 +238,56 @@ export default function NovoDeckPage() {
           ? (data.card_data as Record<string, unknown>)
           : {};
 
-      const cardFaces =
+      const cardFaces: ScryfallCardFace[] | undefined =
         Array.isArray(cardData.card_faces)
-          ? cardData.card_faces
-              .map((face) => {
+          ? cardData.card_faces.flatMap(
+              (face): ScryfallCardFace[] => {
                 if (
                   typeof face !== "object" ||
                   face === null ||
                   Array.isArray(face)
                 ) {
-                  return null;
+                  return [];
                 }
 
-                const faceRecord = face as Record<string, unknown>;
+                const faceRecord =
+                  face as Record<string, unknown>;
 
                 const imageUris =
                   typeof faceRecord.image_uris === "object" &&
                   faceRecord.image_uris !== null &&
                   !Array.isArray(faceRecord.image_uris)
-                    ? (faceRecord.image_uris as Record<string, unknown>)
+                    ? (faceRecord.image_uris as Record<
+                        string,
+                        unknown
+                      >)
                     : {};
 
-                return {
-                  name:
-                    typeof faceRecord.name === "string"
-                      ? faceRecord.name
-                      : undefined,
-                  image_uris: {
-                    normal:
-                      typeof imageUris.normal === "string"
-                        ? imageUris.normal
-                        : undefined,
-                    large:
-                      typeof imageUris.large === "string"
-                        ? imageUris.large
-                        : undefined,
-                  },
-                } satisfies ScryfallCardFace;
-              })
-              .filter(
-                (face): face is ScryfallCardFace =>
-                  face !== null
-              )
+                const parsedFace: ScryfallCardFace = {};
+                const parsedImageUris: ScryfallImageUris = {};
+
+                if (typeof faceRecord.name === "string") {
+                  parsedFace.name = faceRecord.name;
+                }
+
+                if (typeof imageUris.normal === "string") {
+                  parsedImageUris.normal = imageUris.normal;
+                }
+
+                if (typeof imageUris.large === "string") {
+                  parsedImageUris.large = imageUris.large;
+                }
+
+                if (
+                  parsedImageUris.normal ||
+                  parsedImageUris.large
+                ) {
+                  parsedFace.image_uris = parsedImageUris;
+                }
+
+                return [parsedFace];
+              }
+            )
           : undefined;
 
       const commander: ScryfallCard = {
