@@ -1034,6 +1034,8 @@ export default function DeckPage() {
   >({});
   const [collectionCoverageLoading, setCollectionCoverageLoading] =
     useState(false);
+  const [wishlistSaving, setWishlistSaving] = useState(false);
+  const [wishlistStatus, setWishlistStatus] = useState("");
   const [selectedCard, setSelectedCard] =
     useState<DeckCardRow | null>(null);
   const [selectedCardQuantity, setSelectedCardQuantity] =
@@ -2097,6 +2099,52 @@ export default function DeckPage() {
     };
   }, [ownedCollectionByCard, primaryDeckCards]);
 
+  const missingCollectionCards = useMemo(() => {
+    const requiredByCard = new Map<
+      string,
+      {
+        scryfall_id: string;
+        oracle_id: string | null;
+        quantity: number;
+        language: string;
+      }
+    >();
+
+    for (const row of primaryDeckCards) {
+      const key = getCollectionMatchKey(row);
+      const quantity = Math.max(1, row.quantity);
+      const existing = requiredByCard.get(key);
+
+      if (existing) {
+        existing.quantity += quantity;
+        continue;
+      }
+
+      requiredByCard.set(key, {
+        scryfall_id: row.scryfall_id,
+        oracle_id: row.oracle_id,
+        quantity,
+        language: row.printing_data?.lang ?? row.card?.lang ?? "en",
+      });
+    }
+
+    return Array.from(requiredByCard.entries()).flatMap(([key, card]) => {
+      const owned = ownedCollectionByCard[key] ?? 0;
+      const missingQuantity = Math.max(0, card.quantity - owned);
+
+      if (missingQuantity === 0) {
+        return [];
+      }
+
+      return [
+        {
+          ...card,
+          missingQuantity,
+        },
+      ];
+    });
+  }, [ownedCollectionByCard, primaryDeckCards]);
+
   const activeBoardRows = useMemo(() => {
     if (activeBoardTab === "sideboard") {
       return deckCards.filter((row) => row.board === "sideboard");
@@ -2865,6 +2913,161 @@ export default function DeckPage() {
       window.clearTimeout(timeout);
     };
   }, [cardSearch, supabase]);
+
+  async function addMissingCardsToWishlist() {
+    if (
+      !viewerId ||
+      wishlistSaving ||
+      missingCollectionCards.length === 0
+    ) {
+      return;
+    }
+
+    setWishlistSaving(true);
+    setWishlistStatus("");
+
+    try {
+      const { data: wishlistRows, error: wishlistLookupError } = await supabase
+        .from("user_collections")
+        .select("id")
+        .eq("owner_id", viewerId)
+        .eq("kind", "wishlist")
+        .order("created_at", { ascending: true })
+        .limit(1);
+
+      if (wishlistLookupError) {
+        throw wishlistLookupError;
+      }
+
+      let wishlistId = wishlistRows?.[0]?.id ?? null;
+
+      if (!wishlistId) {
+        const { data: newWishlist, error: createWishlistError } = await supabase
+          .from("user_collections")
+          .insert({
+            owner_id: viewerId,
+            name: "Quero comprar",
+            kind: "wishlist",
+          })
+          .select("id")
+          .single();
+
+        if (createWishlistError || !newWishlist) {
+          throw (
+            createWishlistError ??
+            new Error("Não foi possível criar a wishlist.")
+          );
+        }
+
+        wishlistId = newWishlist.id;
+      }
+
+      const { data: existingRows, error: existingError } = await supabase
+        .from("user_collection_cards")
+        .select("id, scryfall_id, oracle_id, quantity")
+        .eq("owner_id", viewerId)
+        .eq("collection_id", wishlistId);
+
+      if (existingError) {
+        throw existingError;
+      }
+
+      type ExistingWishlistRow = {
+        id: string;
+        scryfall_id: string;
+        oracle_id: string | null;
+        quantity: number;
+      };
+
+      const existingByCard = new Map<string, ExistingWishlistRow[]>();
+
+      for (const row of (existingRows ?? []) as ExistingWishlistRow[]) {
+        const key = getCollectionMatchKey(row);
+        const current = existingByCard.get(key) ?? [];
+        current.push(row);
+        existingByCard.set(key, current);
+      }
+
+      const rowsToInsert: Array<{
+        owner_id: string;
+        collection_id: string;
+        scryfall_id: string;
+        oracle_id: string | null;
+        quantity: number;
+        language: string;
+        finish: "normal";
+        card_condition: "NM";
+      }> = [];
+
+      for (const card of missingCollectionCards) {
+        const key = getCollectionMatchKey(card);
+        const existingVariants = existingByCard.get(key) ?? [];
+
+        const alreadyWanted = existingVariants.reduce(
+          (total, row) => total + Math.max(0, row.quantity),
+          0
+        );
+
+        const quantityToAdd = Math.max(
+          0,
+          card.missingQuantity - alreadyWanted
+        );
+
+        if (quantityToAdd === 0) {
+          continue;
+        }
+
+        if (existingVariants.length > 0) {
+          const first = existingVariants[0];
+          const newQuantity = first.quantity + quantityToAdd;
+
+          const { error: updateError } = await supabase
+            .from("user_collection_cards")
+            .update({
+              quantity: newQuantity,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", first.id)
+            .eq("owner_id", viewerId);
+
+          if (updateError) {
+            throw updateError;
+          }
+
+          first.quantity = newQuantity;
+          continue;
+        }
+
+        rowsToInsert.push({
+          owner_id: viewerId,
+          collection_id: wishlistId,
+          scryfall_id: card.scryfall_id,
+          oracle_id: card.oracle_id,
+          quantity: quantityToAdd,
+          language: card.language,
+          finish: "normal",
+          card_condition: "NM",
+        });
+      }
+
+      if (rowsToInsert.length > 0) {
+        const { error: insertError } = await supabase
+          .from("user_collection_cards")
+          .insert(rowsToInsert);
+
+        if (insertError) {
+          throw insertError;
+        }
+      }
+
+      setWishlistStatus("Wishlist atualizada ✓");
+    } catch (error) {
+      console.error("Erro ao adicionar faltantes à wishlist:", error);
+      setWishlistStatus("Erro ao atualizar wishlist");
+    } finally {
+      setWishlistSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (!viewerId) {
@@ -4666,6 +4869,22 @@ export default function DeckPage() {
                       ? "Minha coleção…"
                       : `Tenho ${collectionCoverage.owned}/${collectionCoverage.needed}`}
                   </Link>
+
+                  {viewerId && collectionCoverage.missing > 0 && (
+                    <button
+                      type="button"
+                      disabled={wishlistSaving}
+                      onClick={() => {
+                        void addMissingCardsToWishlist();
+                      }}
+                      title={`Adicionar ${collectionCoverage.missing} carta(s) faltante(s) à lista de desejos`}
+                      className="rounded-full border border-[#c8b27a]/20 bg-[#c8b27a]/[0.045] px-2.5 py-1 text-[11px] text-[#e7d8b4]/55 transition hover:border-[#c8b27a]/35 hover:bg-[#c8b27a]/[0.08] hover:text-[#f4e7c5]/80 disabled:cursor-wait disabled:opacity-40"
+                    >
+                      {wishlistSaving
+                        ? "Adicionando…"
+                        : wishlistStatus || "+ Wishlist"}
+                    </button>
+                  )}
 
                   <span>•</span>
 

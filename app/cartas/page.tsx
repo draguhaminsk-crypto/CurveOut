@@ -188,6 +188,165 @@ const languageOptions = [
   ["zht", "Chinês tradicional"],
 ] as const;
 
+type TypeOption = {
+  value: string;
+  label: string;
+};
+
+const baseTypeOptions: TypeOption[] = [
+  { value: "Legendary", label: "Lendário" },
+  { value: "Basic", label: "Básico" },
+  { value: "Snow", label: "Neve" },
+  { value: "World", label: "Mundo" },
+  { value: "Creature", label: "Criatura" },
+  { value: "Artifact", label: "Artefato" },
+  { value: "Enchantment", label: "Encantamento" },
+  { value: "Instant", label: "Instantânea" },
+  { value: "Sorcery", label: "Feitiço" },
+  { value: "Land", label: "Terreno" },
+  { value: "Planeswalker", label: "Planeswalker" },
+  { value: "Battle", label: "Batalha" },
+  { value: "Human", label: "Humano" },
+  { value: "Noble", label: "Nobre" },
+  { value: "Wizard", label: "Mago" },
+  { value: "Warrior", label: "Guerreiro" },
+  { value: "Soldier", label: "Soldado" },
+  { value: "Knight", label: "Cavaleiro" },
+  { value: "Cleric", label: "Clérigo" },
+  { value: "Rogue", label: "Ladino" },
+  { value: "Shaman", label: "Xamã" },
+  { value: "Druid", label: "Druida" },
+  { value: "Advisor", label: "Conselheiro" },
+  { value: "Scout", label: "Batedor" },
+  { value: "Pirate", label: "Pirata" },
+  { value: "Ninja", label: "Ninja" },
+  { value: "Samurai", label: "Samurai" },
+  { value: "Assassin", label: "Assassino" },
+  { value: "Archer", label: "Arqueiro" },
+  { value: "Dinosaur", label: "Dinossauro" },
+  { value: "Dragon", label: "Dragão" },
+  { value: "Elf", label: "Elfo" },
+  { value: "Goblin", label: "Goblin" },
+  { value: "Zombie", label: "Zumbi" },
+  { value: "Vampire", label: "Vampiro" },
+  { value: "Angel", label: "Anjo" },
+  { value: "Demon", label: "Demônio" },
+  { value: "Merfolk", label: "Tritão" },
+  { value: "Phyrexian", label: "Phyrexiano" },
+  { value: "Spirit", label: "Espírito" },
+  { value: "Elemental", label: "Elemental" },
+  { value: "Faerie", label: "Fada" },
+  { value: "Giant", label: "Gigante" },
+  { value: "Beast", label: "Besta" },
+  { value: "Bird", label: "Ave" },
+  { value: "Cat", label: "Gato" },
+  { value: "Dog", label: "Cachorro" },
+  { value: "Wolf", label: "Lobo" },
+  { value: "Bear", label: "Urso" },
+  { value: "Snake", label: "Cobra" },
+  { value: "Rat", label: "Rato" },
+  { value: "Rabbit", label: "Coelho" },
+  { value: "Horse", label: "Cavalo" },
+  { value: "Unicorn", label: "Unicórnio" },
+  { value: "Pegasus", label: "Pégaso" },
+  { value: "Griffin", label: "Grifo" },
+  { value: "Phoenix", label: "Fênix" },
+  { value: "Hydra", label: "Hidra" },
+  { value: "Sphinx", label: "Esfinge" },
+  { value: "Skeleton", label: "Esqueleto" },
+  { value: "Horror", label: "Horror" },
+  { value: "Nightmare", label: "Pesadelo" },
+  { value: "Equipment", label: "Equipamento" },
+  { value: "Vehicle", label: "Veículo" },
+  { value: "Clue", label: "Pista" },
+  { value: "Treasure", label: "Tesouro" },
+  { value: "Food", label: "Comida" },
+  { value: "Blood", label: "Sangue" },
+  { value: "Map", label: "Mapa" },
+  { value: "Aura", label: "Aura" },
+  { value: "Saga", label: "Saga" },
+  { value: "Class", label: "Classe" },
+  { value: "Case", label: "Caso" },
+  { value: "Room", label: "Sala" },
+  { value: "Role", label: "Papel" },
+  { value: "Background", label: "Antecedente" },
+  { value: "Forest", label: "Floresta" },
+  { value: "Island", label: "Ilha" },
+  { value: "Mountain", label: "Montanha" },
+  { value: "Swamp", label: "Pântano" },
+  { value: "Plains", label: "Planície" },
+  { value: "Desert", label: "Deserto" },
+  { value: "Gate", label: "Portão" },
+  { value: "Cave", label: "Caverna" },
+  { value: "Lair", label: "Covil" },
+  { value: "Locus", label: "Locus" },
+  { value: "Sphere", label: "Esfera" },
+  { value: "Arcane", label: "Arcano" },
+  { value: "Lesson", label: "Lição" },
+  { value: "Trap", label: "Armadilha" },
+  { value: "Adventure", label: "Aventura" },
+];
+
+const ptBrTypeAliases: Record<string, string> = Object.fromEntries(
+  baseTypeOptions.map((option) => [
+    option.label
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLocaleLowerCase("pt-BR"),
+    option.value,
+  ])
+);
+
+function normalizeTypeSearch(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR");
+}
+
+function parseSelectedTypes(value: string) {
+  return value
+    .split("|")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getTypeLabel(value: string) {
+  return (
+    baseTypeOptions.find((option) => option.value === value)?.label ??
+    value
+  );
+}
+
+function resolveTypeSearchTerm(value: string) {
+  const normalized = normalizeTypeSearch(value.trim());
+
+  if (!normalized) return "";
+
+  const exactAlias = ptBrTypeAliases[normalized];
+  if (exactAlias) return exactAlias;
+
+  const partialAlias = Object.entries(ptBrTypeAliases).find(
+    ([label]) => label.startsWith(normalized)
+  );
+
+  return partialAlias?.[1] ?? value.trim();
+}
+
+function extractTypeCandidates(typeLine: string) {
+  const parts = typeLine
+    .replace(/\/\//g, " — ")
+    .split(/\s+—\s+/)
+    .flatMap((part) =>
+      part
+        .split(/\s+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    );
+
+  return Array.from(new Set(parts));
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (
     typeof value === "object" &&
@@ -299,6 +458,71 @@ export default function CardsCatalogPage() {
   const [advanced, setAdvanced] =
     useState<AdvancedForm>(initialAdvancedForm);
 
+  const [typeSuggestionsOpen, setTypeSuggestionsOpen] =
+    useState(false);
+  const [typeSearch, setTypeSearch] = useState("");
+  const [dynamicTypeOptions, setDynamicTypeOptions] = useState<TypeOption[]>([]);
+
+  const selectedTypes = useMemo(
+    () => parseSelectedTypes(advanced.type),
+    [advanced.type]
+  );
+
+  const allTypeOptions = useMemo(() => {
+    const byValue = new Map<string, TypeOption>();
+
+    for (const option of [...baseTypeOptions, ...dynamicTypeOptions]) {
+      if (!byValue.has(option.value)) {
+        byValue.set(option.value, option);
+      }
+    }
+
+    return Array.from(byValue.values());
+  }, [dynamicTypeOptions]);
+
+  const filteredTypeOptions = useMemo(() => {
+    const query = normalizeTypeSearch(typeSearch.trim());
+    const englishQuery = normalizeTypeSearch(resolveTypeSearchTerm(typeSearch));
+    const selected = new Set(selectedTypes);
+
+    return allTypeOptions
+      .filter((option) => {
+        if (selected.has(option.value)) return false;
+
+        if (!query) return true;
+
+        const label = normalizeTypeSearch(option.label);
+        const value = normalizeTypeSearch(option.value);
+
+        return (
+          label.includes(query) ||
+          value.includes(query) ||
+          value.includes(englishQuery)
+        );
+      })
+      .sort((a, b) =>
+        a.label.localeCompare(b.label, "pt-BR", { sensitivity: "base" })
+      );
+  }, [allTypeOptions, selectedTypes, typeSearch]);
+
+  function selectAdvancedType(value: string) {
+    const next = Array.from(
+      new Set([...selectedTypes, value])
+    );
+
+    updateAdvanced("type", next.join("|"));
+    setTypeSearch("");
+    setTypeSuggestionsOpen(true);
+  }
+
+  function removeAdvancedType(value: string) {
+    const next = selectedTypes.filter(
+      (item) => item !== value
+    );
+
+    updateAdvanced("type", next.join("|"));
+  }
+
   const [results, setResults] = useState<CardItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -307,6 +531,78 @@ export default function CardsCatalogPage() {
 
   const [resultView, setResultView] =
     useState<ViewMode>("images");
+
+  useEffect(() => {
+    const rawQuery = typeSearch.trim();
+
+    if (rawQuery.length < 2) {
+      setDynamicTypeOptions([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const timer = window.setTimeout(async () => {
+      const resolvedQuery = resolveTypeSearchTerm(rawQuery);
+
+      const { data, error } = await supabase
+        .from("cards")
+        .select("type_line")
+        .ilike("type_line", `%${resolvedQuery}%`)
+        .limit(200);
+
+      if (cancelled) return;
+
+      if (error) {
+        console.warn("Não foi possível carregar tipos adicionais:", error.message);
+        setDynamicTypeOptions([]);
+        return;
+      }
+
+      const normalizedResolved = normalizeTypeSearch(resolvedQuery);
+      const values = new Set<string>();
+
+      for (const row of data ?? []) {
+        if (typeof row.type_line !== "string") continue;
+
+        for (const candidate of extractTypeCandidates(row.type_line)) {
+          if (
+            normalizeTypeSearch(candidate).includes(normalizedResolved)
+          ) {
+            values.add(candidate);
+          }
+        }
+      }
+
+      if (
+        values.size === 0 &&
+        (data?.length ?? 0) > 0 &&
+        resolvedQuery.length > 1
+      ) {
+        values.add(resolvedQuery);
+      }
+
+      const dynamic = Array.from(values)
+        .sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }))
+        .slice(0, 40)
+        .map((value) => ({
+          value,
+          label:
+            baseTypeOptions.find(
+              (option) =>
+                normalizeTypeSearch(option.value) ===
+                normalizeTypeSearch(value)
+            )?.label ?? value,
+        }));
+
+      setDynamicTypeOptions(dynamic);
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [supabase, typeSearch]);
 
   useEffect(() => {
     if (searchMode !== "simple") return;
@@ -585,6 +881,8 @@ export default function CardsCatalogPage() {
 
   function clearAdvanced() {
     setAdvanced(initialAdvancedForm);
+    setTypeSearch("");
+    setTypeSuggestionsOpen(false);
     setResults([]);
     setErrorMessage("");
     setResultView("images");
@@ -760,16 +1058,155 @@ export default function CardsCatalogPage() {
 
               <AdvancedRow
                 label="Linha de tipo"
-                description="Tipo, subtipo ou supertipo."
+                description="Selecione um ou mais tipos, subtipos ou supertypes."
               >
-                <input
-                  value={advanced.type}
-                  onChange={(event) =>
-                    updateAdvanced("type", event.target.value)
-                  }
-                  placeholder="Ex.: Dinosaur, Artifact, Wizard..."
-                  className={inputClass}
-                />
+                <div className="relative">
+                  <div
+                    className={`flex min-h-[48px] w-full flex-wrap items-center gap-2 rounded-xl border bg-[#0d0d10] px-3 py-2 transition ${
+                      typeSuggestionsOpen
+                        ? "border-white/25"
+                        : "border-white/10"
+                    }`}
+                  >
+                    {selectedTypes.map((value) => (
+                      <span
+                        key={value}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-[#c8b27a]/20 bg-[#c8b27a]/[0.06] px-2.5 py-1.5 text-xs text-[#eadab4]/75"
+                      >
+                        {getTypeLabel(value)}
+
+                        <button
+                          type="button"
+                          onClick={() => removeAdvancedType(value)}
+                          className="text-[#eadab4]/35 transition hover:text-[#f4e7c5]"
+                          aria-label={`Remover ${getTypeLabel(value)}`}
+                          title={`Remover ${getTypeLabel(value)}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+
+                    <input
+                      value={typeSearch}
+                      onFocus={() => setTypeSuggestionsOpen(true)}
+                      onBlur={() => {
+                        window.setTimeout(() => {
+                          setTypeSuggestionsOpen(false);
+                        }, 120);
+                      }}
+                      onChange={(event) => {
+                        setTypeSearch(event.target.value);
+                        setTypeSuggestionsOpen(true);
+                      }}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === "Backspace" &&
+                          typeSearch === "" &&
+                          selectedTypes.length > 0
+                        ) {
+                          removeAdvancedType(
+                            selectedTypes[selectedTypes.length - 1]
+                          );
+                          return;
+                        }
+
+                        if (
+                          event.key === "Enter" &&
+                          filteredTypeOptions.length > 0
+                        ) {
+                          event.preventDefault();
+                          selectAdvancedType(
+                            filteredTypeOptions[0].value
+                          );
+                        }
+                      }}
+                      placeholder={
+                        selectedTypes.length === 0
+                          ? "Ex.: Lendário, Dinossauro, Artefato..."
+                          : "Adicionar outro tipo..."
+                      }
+                      autoComplete="off"
+                      className="min-w-[180px] flex-1 bg-transparent px-1 py-1 text-sm text-white/70 outline-none placeholder:text-white/18"
+                    />
+                  </div>
+
+                  {typeSuggestionsOpen && (
+                    <div
+                      className="absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl border border-white/12 bg-[#111114]/[0.99] shadow-2xl shadow-black/70 backdrop-blur-xl"
+                    >
+                      <div className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-white/[0.07] bg-[#111114]/95 px-4 py-3 backdrop-blur-xl">
+                        <div>
+                          <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-[#c8b27a]/55">
+                            Linha de tipo
+                          </p>
+                          <p className="mt-0.5 text-xs text-white/30">
+                            {typeSearch.trim()
+                              ? `${filteredTypeOptions.length} opção${
+                                  filteredTypeOptions.length === 1 ? "" : "ões"
+                                } encontrada${
+                                  filteredTypeOptions.length === 1 ? "" : "s"
+                                }`
+                              : `${filteredTypeOptions.length} tipos disponíveis`}
+                          </p>
+                        </div>
+
+                        {selectedTypes.length > 0 && (
+                          <span className="rounded-full border border-[#c8b27a]/15 bg-[#c8b27a]/[0.04] px-2.5 py-1 text-[10px] text-[#e7d8b4]/50">
+                            {selectedTypes.length} selecionado{
+                              selectedTypes.length === 1 ? "" : "s"
+                            }
+                          </span>
+                        )}
+                      </div>
+
+                      <div
+                        className="max-h-[420px] overflow-y-auto p-2 [scrollbar-color:rgba(255,255,255,0.18)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/15 hover:[&::-webkit-scrollbar-thumb]:bg-white/25"
+                      >
+                        {filteredTypeOptions.length === 0 ? (
+                          <div className="px-4 py-8 text-center">
+                            <p className="text-sm text-white/35">
+                              Nenhum tipo encontrado.
+                            </p>
+                            <p className="mt-1 text-xs text-white/20">
+                              Tente pesquisar pelo nome em português ou inglês.
+                            </p>
+                          </div>
+                        ) : (
+                          filteredTypeOptions.map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() =>
+                                selectAdvancedType(option.value)
+                              }
+                              className="group flex w-full items-center justify-between gap-4 rounded-xl border border-transparent px-3.5 py-3 text-left transition hover:border-white/[0.07] hover:bg-white/[0.045]"
+                            >
+                              <div className="min-w-0">
+                                <span className="block truncate text-sm font-medium text-white/72 transition group-hover:text-white/90">
+                                  {option.label}
+                                </span>
+                                <span className="mt-0.5 block truncate text-[11px] text-white/22 md:hidden">
+                                  {option.value}
+                                </span>
+                              </div>
+
+                              <div className="flex shrink-0 items-center gap-3">
+                                <span className="hidden text-xs text-white/22 transition group-hover:text-white/35 md:block">
+                                  {option.value}
+                                </span>
+                                <span className="flex h-6 w-6 items-center justify-center rounded-full border border-white/[0.07] bg-white/[0.02] text-xs text-white/20 transition group-hover:border-[#c8b27a]/20 group-hover:bg-[#c8b27a]/[0.05] group-hover:text-[#e7d8b4]/60">
+                                  +
+                                </span>
+                              </div>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </AdvancedRow>
 
               <AdvancedRow
@@ -1286,10 +1723,10 @@ export default function CardsCatalogPage() {
 }
 
 const inputClass =
-  "w-full rounded-xl border border-white/10 bg-[#0d0d10] px-4 py-3 text-sm text-white/70 outline-none transition placeholder:text-white/18 focus:border-white/25";
+  "w-full rounded-xl border border-white/10 bg-[#0d0d10] px-4 py-3 text-sm text-white/70 outline-none transition placeholder:text-white/18 hover:border-white/15 focus:border-[#c8b27a]/25 focus:bg-[#0f0f12]";
 
 const selectClass =
-  "w-full rounded-xl border border-white/10 bg-[#0d0d10] px-3 py-3 text-sm text-white/55 outline-none transition focus:border-white/25";
+  "w-full cursor-pointer appearance-none rounded-xl border border-white/10 bg-[#0d0d10] px-4 py-3 pr-10 text-sm text-white/60 outline-none transition [color-scheme:dark] hover:border-white/15 hover:bg-[#0f0f12] focus:border-[#c8b27a]/25 focus:bg-[#0f0f12] [&>option]:bg-[#111114] [&>option]:text-white/70";
 
 function FormLabel({
   children,

@@ -89,12 +89,10 @@ function proxifyCard(card: ScryfallCard): ScryfallCard {
 async function getRandomCommander(): Promise<ScryfallCard> {
   const portuguese = await fetch(
     "https://api.scryfall.com/cards/random?q=is%3Acommander+lang%3Apt",
-    {
-      headers: scryfallHeaders,
-      next: {
-        revalidate: 600,
-      },
-    }
+ {
+  headers: scryfallHeaders,
+  cache: "no-store",
+}
   );
 
   if (portuguese.ok) {
@@ -203,9 +201,9 @@ export async function GET() {
       },
       {
         headers: {
-          ...corsHeaders,
-          "Cache-Control": "public, max-age=60, s-maxage=600",
-        },
+  ...corsHeaders,
+  "Cache-Control": "no-store, no-cache, must-revalidate",
+},
       }
     );
   } catch (error) {
