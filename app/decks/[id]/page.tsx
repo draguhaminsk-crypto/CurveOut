@@ -4756,7 +4756,7 @@ export default function DeckPage() {
   }
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#0b0b0d] px-3 py-5 text-[#f4f1e8] md:px-4 md:py-8 xl:px-5">
+    <main className="min-h-screen overflow-x-auto bg-[#0b0b0d] px-3 py-5 text-[#f4f1e8] md:px-4 md:py-8 xl:px-5">
       <div className={editing ? "mx-auto w-full max-w-4xl" : "w-full"}>
         <div className="sticky top-3 z-[75] mb-4 flex items-center">
           {editing ? (
