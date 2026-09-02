@@ -418,7 +418,7 @@ export default function PublicDecksPage() {
                   href={`/decks/${deck.id}`}
                   className="group overflow-hidden rounded-2xl border border-white/10 bg-[#101013] transition hover:-translate-y-0.5 hover:border-white/20"
                 >
-                  <div className="relative h-44 overflow-hidden bg-white/[0.02]">
+                  <div className="relative aspect-[3/2] overflow-hidden bg-white/[0.02]">
                     {image ? (
                       <img
                         src={image}
