@@ -1140,6 +1140,8 @@ export default function DeckPage() {
   const [updateDeckError, setUpdateDeckError] = useState("");
   const [importDeckOpen, setImportDeckOpen] = useState(false);
   const [importText, setImportText] = useState("");
+  const [importingDeck, setImportingDeck] = useState(false);
+  const [importDeckError, setImportDeckError] = useState("");
   const [exportDeckOpen, setExportDeckOpen] = useState(false);
   const [exportCopied, setExportCopied] = useState(false);
   const [shareDeckOpen, setShareDeckOpen] = useState(false);
@@ -4323,6 +4325,201 @@ export default function DeckPage() {
     }
   }
 
+  async function importParsedCards() {
+    if (!deck || !isOwner || importingDeck || parsedImport.cards.length === 0) {
+      return;
+    }
+
+    setImportingDeck(true);
+    setImportDeckError("");
+
+    try {
+      const uniqueNames = Array.from(
+        new Set(parsedImport.cards.map((card) => card.name.trim()).filter(Boolean))
+      );
+
+      const response = await fetch("/api/scryfall/cards", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({
+          identifiers: uniqueNames.map((name) => ({ name })),
+        }),
+      });
+
+      const result = (await response.json()) as {
+        cards?: ResolvedCard[];
+        notFound?: Array<{ name?: string }>;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          result.error || "Não foi possível consultar as cartas da lista."
+        );
+      }
+
+      const resolvedByName = new Map<string, ResolvedCard>();
+
+      for (const card of result.cards ?? []) {
+        const requestedName = card.requested_name?.trim();
+        if (requestedName) {
+          resolvedByName.set(
+            requestedName.toLocaleLowerCase("en-US"),
+            card
+          );
+        }
+
+        resolvedByName.set(card.name.trim().toLocaleLowerCase("en-US"), card);
+      }
+
+      const missingNames = uniqueNames.filter(
+        (name) => !resolvedByName.has(name.toLocaleLowerCase("en-US"))
+      );
+
+      for (const item of result.notFound ?? []) {
+        const name = item.name?.trim();
+        if (name && !missingNames.some((value) => value.toLowerCase() === name.toLowerCase())) {
+          missingNames.push(name);
+        }
+      }
+
+      if (missingNames.length > 0) {
+        throw new Error(
+          `Não encontrei ${missingNames.length} carta(s): ${missingNames
+            .slice(0, 8)
+            .join(", ")}${missingNames.length > 8 ? "…" : ""}`
+        );
+      }
+
+      const mergedImport = new Map<
+        string,
+        { card: ResolvedCard; board: ImportBoard; quantity: number }
+      >();
+
+      for (const imported of parsedImport.cards) {
+        const card = resolvedByName.get(
+          imported.name.trim().toLocaleLowerCase("en-US")
+        );
+
+        if (!card) continue;
+
+        const key = `${card.id}:${imported.board}`;
+        const current = mergedImport.get(key);
+
+        mergedImport.set(key, {
+          card,
+          board: imported.board,
+          quantity: (current?.quantity ?? 0) + imported.quantity,
+        });
+      }
+
+      const existingByKey = new Map(
+        deckCards.map((row) => [`${row.scryfall_id}:${row.board}`, row] as const)
+      );
+
+      const rowsToInsert: Array<{
+        deck_id: string;
+        scryfall_id: string;
+        oracle_id: string | null;
+        quantity: number;
+        board: ImportBoard;
+        manual_category: null;
+        printing_data: CardPrinting;
+      }> = [];
+
+      for (const item of mergedImport.values()) {
+        const existing = existingByKey.get(`${item.card.id}:${item.board}`);
+
+        if (existing?.id) {
+          const { error: updateError } = await supabase
+            .from("deck_cards")
+            .update({ quantity: existing.quantity + item.quantity })
+            .eq("id", existing.id);
+
+          if (updateError) throw updateError;
+          continue;
+        }
+
+        const imageNormal =
+          item.card.image_uris?.normal ??
+          item.card.card_faces?.[0]?.image_uris?.normal ??
+          null;
+        const imageLarge =
+          item.card.image_uris?.large ??
+          item.card.card_faces?.[0]?.image_uris?.large ??
+          imageNormal;
+
+        rowsToInsert.push({
+          deck_id: deck.id,
+          scryfall_id: item.card.id,
+          oracle_id: item.card.oracle_id ?? null,
+          quantity: item.quantity,
+          board: item.board,
+          manual_category: null,
+          printing_data: {
+            scryfall_id: item.card.id,
+            oracle_id: item.card.oracle_id ?? null,
+            name: item.card.name,
+            type_line: item.card.type_line ?? null,
+            image_uri: imageNormal,
+            image_uri_large: imageLarge,
+            set: item.card.set ?? "",
+            set_name: item.card.set_name ?? "",
+            collector_number: item.card.collector_number ?? "",
+            lang: item.card.lang ?? "en",
+            released_at: item.card.released_at ?? "",
+          },
+        });
+      }
+
+      if (rowsToInsert.length > 0) {
+        const { error: insertError } = await supabase
+          .from("deck_cards")
+          .insert(rowsToInsert);
+
+        if (insertError) throw insertError;
+      }
+
+      const importedCommander = [...mergedImport.values()].find(
+        (item) => item.board === "commander"
+      );
+
+      const updatedAt = new Date().toISOString();
+      const deckUpdate: {
+        updated_at: string;
+        commander_scryfall_id?: string;
+      } = { updated_at: updatedAt };
+
+      if (!deck.commander_scryfall_id && importedCommander) {
+        deckUpdate.commander_scryfall_id = importedCommander.card.id;
+      }
+
+      const { error: deckUpdateError } = await supabase
+        .from("decks")
+        .update(deckUpdate)
+        .eq("id", deck.id)
+        .eq("owner_id", deck.owner_id);
+
+      if (deckUpdateError) throw deckUpdateError;
+
+      setImportDeckOpen(false);
+      setImportText("");
+      window.location.reload();
+    } catch (error) {
+      console.error("Erro ao importar deck:", error);
+      setImportDeckError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível importar a lista."
+      );
+    } finally {
+      setImportingDeck(false);
+    }
+  }
+
   function startEditing() {
     if (!deck) return;
 
@@ -5139,7 +5336,10 @@ export default function DeckPage() {
 
                       <button
                         type="button"
-                        onClick={() => setImportDeckOpen(true)}
+                        onClick={() => {
+                    setImportDeckError("");
+                    setImportDeckOpen(true);
+                  }}
                         className="
                           rounded-lg
                           border border-white/15
@@ -5743,7 +5943,10 @@ export default function DeckPage() {
                     {isOwner && activeBoardTab === "deck" && (
                       <button
                         type="button"
-                        onClick={() => setImportDeckOpen(true)}
+                        onClick={() => {
+                    setImportDeckError("");
+                    setImportDeckOpen(true);
+                  }}
                         className="
                           mt-6 rounded-lg bg-[#f4f1e8]
                           px-6 py-2.5 text-sm font-semibold
@@ -7589,7 +7792,10 @@ export default function DeckPage() {
 
                 <textarea
                   value={importText}
-                  onChange={(event) => setImportText(event.target.value)}
+                  onChange={(event) => {
+                    setImportText(event.target.value);
+                    setImportDeckError("");
+                  }}
                   placeholder={`Commander
 1 Atraxa, Praetors' Voice
 
@@ -7756,11 +7962,18 @@ Sideboard
 
             {/* RODAPÉ */}
             <div className="flex flex-col gap-4 border-t border-white/10 px-6 py-5 md:flex-row md:items-center md:justify-between md:px-8">
-              <p className="max-w-2xl text-xs leading-5 text-white/25">
-                Nesta etapa o CurveOut já interpreta a lista. A próxima parte
-                será resolver cada nome no Scryfall e gravar as cartas em
-                deck_cards.
-              </p>
+              <div className="max-w-2xl">
+                {importDeckError ? (
+                  <p className="text-xs leading-5 text-red-200/65">
+                    {importDeckError}
+                  </p>
+                ) : (
+                  <p className="text-xs leading-5 text-white/25">
+                    O CurveOut vai localizar as cartas, somar cópias que já
+                    existem no deck e gravar as novas cartas automaticamente.
+                  </p>
+                )}
+              </div>
 
               <div className="flex shrink-0 gap-2">
                 <button
@@ -7779,8 +7992,8 @@ Sideboard
 
                 <button
                   type="button"
-                  disabled={parsedImport.cards.length === 0}
-                  title="A conexão com o Scryfall será ligada na próxima etapa."
+                  onClick={() => void importParsedCards()}
+                  disabled={parsedImport.cards.length === 0 || importingDeck}
                   className="
                     rounded-lg
                     bg-[#f4f1e8]
@@ -7793,7 +8006,9 @@ Sideboard
                     disabled:opacity-35
                   "
                 >
-                  Preparar {parsedImport.totalCopies || ""} cartas
+                  {importingDeck
+                    ? "Importando..."
+                    : `Importar ${parsedImport.totalCopies || ""} cartas`}
                 </button>
               </div>
             </div>
