@@ -360,12 +360,30 @@ export default function CollectionPage() {
       if (cancelled) return;
       setUserId(user.id);
 
-      const { data: initialCollectionRows, error: collectionsError } = await supabase
-        .from("user_collections")
-        .select("id, owner_id, name, kind, created_at, updated_at")
-        .eq("owner_id", user.id)
-        .order("kind", { ascending: true })
-        .order("created_at", { ascending: true });
+      // Coleções e cartas pertencem ao mesmo usuário e não dependem uma da outra.
+      // Buscar as duas em paralelo economiza um round-trip inteiro ao Supabase.
+      const [collectionsResult, cardsResult] = await Promise.all([
+        supabase
+          .from("user_collections")
+          .select("id, owner_id, name, kind, created_at, updated_at")
+          .eq("owner_id", user.id)
+          .order("kind", { ascending: true })
+          .order("created_at", { ascending: true }),
+        supabase
+          .from("user_collection_cards")
+          .select(
+            "id, owner_id, collection_id, scryfall_id, oracle_id, quantity, language, finish, card_condition, created_at, updated_at"
+          )
+          .eq("owner_id", user.id)
+          .order("updated_at", { ascending: false }),
+      ]);
+
+      const {
+        data: initialCollectionRows,
+        error: collectionsError,
+      } = collectionsResult;
+
+      const { data: cardRows, error: cardsError } = cardsResult;
 
       let collectionRows = initialCollectionRows;
 
@@ -403,14 +421,6 @@ export default function CollectionPage() {
       const loadedCollections = collectionRows as UserCollection[];
       setCollections(loadedCollections);
 
-      const { data: cardRows, error: cardsError } = await supabase
-        .from("user_collection_cards")
-        .select(
-          "id, owner_id, collection_id, scryfall_id, oracle_id, quantity, language, finish, card_condition, created_at, updated_at"
-        )
-        .eq("owner_id", user.id)
-        .order("updated_at", { ascending: false });
-
       if (cardsError) {
         console.error("Erro ao carregar cartas da coleção:", cardsError);
         setErrorMessage(
@@ -429,23 +439,28 @@ export default function CollectionPage() {
       }
 
       const ids = Array.from(new Set(rows.map((row) => row.scryfall_id)));
-      const catalog: CardCatalogRow[] = [];
 
-      for (const part of chunks(ids)) {
-        const { data, error } = await supabase
-          .from("cards")
-          .select(
-            "scryfall_id, oracle_id, name, type_line, color_identity, image_uri, image_uri_large, card_data"
-          )
-          .in("scryfall_id", part);
+      // Coleções grandes precisam consultar a tabela `cards` em blocos.
+      // Antes os blocos eram aguardados um por um; agora rodam em paralelo.
+      const catalogParts = await Promise.all(
+        chunks(ids).map(async (part) => {
+          const { data, error } = await supabase
+            .from("cards")
+            .select(
+              "scryfall_id, oracle_id, name, type_line, color_identity, image_uri, image_uri_large, card_data"
+            )
+            .in("scryfall_id", part);
 
-        if (error) {
-          console.error("Erro ao resolver cartas da coleção:", error);
-          continue;
-        }
+          if (error) {
+            console.error("Erro ao resolver cartas da coleção:", error);
+            return [] as CardCatalogRow[];
+          }
 
-        catalog.push(...((data ?? []) as CardCatalogRow[]));
-      }
+          return (data ?? []) as CardCatalogRow[];
+        })
+      );
+
+      const catalog = catalogParts.flat();
 
       if (cancelled) return;
 
