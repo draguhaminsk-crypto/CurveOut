@@ -6177,27 +6177,6 @@ export default function DeckPage() {
                                         {row.quantity}
                                       </span>
 
-                                      {viewerId && (() => {
-                                        const owned =
-                                          ownedCollectionByCard[
-                                            getCollectionMatchKey(row)
-                                          ] ?? 0;
-                                        const enough = owned >= row.quantity;
-
-                                        return (
-                                          <span
-                                            title={`Tenho ${owned} / Preciso ${row.quantity}`}
-                                            className={`absolute bottom-1.5 left-1.5 z-10 rounded-md border bg-black/80 px-1.5 py-0.5 text-[9px] font-semibold backdrop-blur-sm ${
-                                              enough
-                                                ? "border-emerald-300/20 text-emerald-100/65"
-                                                : "border-amber-300/20 text-amber-100/65"
-                                            }`}
-                                          >
-                                            {owned}/{row.quantity}
-                                          </span>
-                                        );
-                                      })()}
-
                                       {/* CONTROLES NO HOVER */}
                                       <div
                                         className="
