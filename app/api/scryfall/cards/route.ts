@@ -23,6 +23,7 @@ type ScryfallCard = {
     large?: string;
   };
   card_faces?: {
+    name?: string;
     image_uris?: {
       normal?: string;
       large?: string;
@@ -149,6 +150,54 @@ async function cacheCards(cards: ScryfallCard[]) {
   }
 }
 
+function normalizeCardName(value: string) {
+  return value.trim().toLocaleLowerCase("en-US");
+}
+
+function cardMatchesIdentifier(card: ScryfallCard, identifier: CardIdentifier) {
+  if (identifier.id) {
+    return card.id === identifier.id;
+  }
+
+  if (!identifier.name) return false;
+
+  const requestedName = normalizeCardName(identifier.name);
+  const fullName = normalizeCardName(card.name);
+
+  const faceNames = [
+    ...card.name.split(" // "),
+    ...(card.card_faces ?? [])
+      .map((face) => face.name)
+      .filter((name): name is string => Boolean(name)),
+  ].map(normalizeCardName);
+
+  const sameName =
+    fullName === requestedName || faceNames.includes(requestedName);
+
+  const sameSet =
+    !identifier.set ||
+    card.set?.toLocaleLowerCase("en-US") ===
+      identifier.set.toLocaleLowerCase("en-US");
+
+  const sameCollector =
+    !identifier.collector_number ||
+    card.collector_number === identifier.collector_number;
+
+  return sameName && sameSet && sameCollector;
+}
+
+function withRequestedName(
+  card: ScryfallCard,
+  identifier: CardIdentifier
+): ScryfallCard {
+  if (!identifier.name) return card;
+
+  return {
+    ...card,
+    requested_name: identifier.name,
+  };
+}
+
 async function getCardsFromCache(identifiers: CardIdentifier[]) {
   const admin = createAdminClient();
 
@@ -172,10 +221,19 @@ async function getCardsFromCache(identifiers: CardIdentifier[]) {
 
     for (const row of data ?? []) {
       const card = cardRowToScryfallCard(row as CardRow);
-      if (card.id) cachedCards.push(card);
+      const identifier = identifiers.find((item) =>
+        cardMatchesIdentifier(card, item)
+      );
+
+      if (card.id) {
+        cachedCards.push(
+          identifier ? withRequestedName(card, identifier) : card
+        );
+      }
     }
   }
 
+  // Primeiro tenta nomes completos/exatos, que é o caminho mais rápido.
   if (names.length > 0) {
     const { data, error } = await admin
       .from("cards")
@@ -186,36 +244,80 @@ async function getCardsFromCache(identifiers: CardIdentifier[]) {
 
     for (const row of data ?? []) {
       const card = cardRowToScryfallCard(row as CardRow);
-      if (card.id) cachedCards.push(card);
+      const identifier = identifiers.find((item) =>
+        cardMatchesIdentifier(card, item)
+      );
+
+      if (card.id) {
+        cachedCards.push(
+          identifier ? withRequestedName(card, identifier) : card
+        );
+      }
     }
   }
 
+  // MDFCs, Adventures e outras cartas de duas faces ficam salvas como:
+  // "Boggart Trawler // Boggart Bog".
+  // Uma decklist normalmente traz somente "Boggart Trawler". Então, para
+  // os nomes que ainda não bateram, procuramos a face da frente OU a de trás
+  // diretamente no espelho local do CurveOut, sem depender do Scryfall.
+  const unresolvedNameIdentifiers = identifiers.filter(
+    (identifier) =>
+      Boolean(identifier.name) &&
+      !cachedCards.some((card) => cardMatchesIdentifier(card, identifier))
+  );
+
+  for (const identifier of unresolvedNameIdentifiers) {
+    const requestedName = identifier.name?.trim();
+    if (!requestedName) continue;
+
+    const candidates: CardRow[] = [];
+
+    const { data: frontRows, error: frontError } = await admin
+      .from("cards")
+      .select("*")
+      .ilike("name", `${requestedName} // %`)
+      .limit(10);
+
+    if (frontError) throw frontError;
+    candidates.push(...((frontRows ?? []) as CardRow[]));
+
+    const { data: backRows, error: backError } = await admin
+      .from("cards")
+      .select("*")
+      .ilike("name", `% // ${requestedName}`)
+      .limit(10);
+
+    if (backError) throw backError;
+    candidates.push(...((backRows ?? []) as CardRow[]));
+
+    for (const row of candidates) {
+      const card = cardRowToScryfallCard(row);
+
+      if (!card.id || !cardMatchesIdentifier(card, identifier)) {
+        continue;
+      }
+
+      cachedCards.push(withRequestedName(card, identifier));
+      break;
+    }
+  }
+
+  // Mantemos uma entrada por combinação "carta + nome solicitado". Isso é
+  // importante para o import conseguir relacionar "Pinnacle Monk" com a
+  // carta cujo nome completo é "Pinnacle Monk // Mystic Peak".
   const uniqueCards = Array.from(
-    new Map(cachedCards.map((card) => [card.id, card])).values()
+    new Map(
+      cachedCards.map((card) => [
+        `${card.id}:${normalizeCardName(card.requested_name ?? card.name)}`,
+        card,
+      ])
+    ).values()
   );
 
   const missingIdentifiers = identifiers.filter(
     (identifier) =>
-      !uniqueCards.some((card) => {
-        if (identifier.id) {
-          return card.id === identifier.id;
-        }
-
-        if (!identifier.name) return false;
-
-        const sameName =
-          card.name.toLowerCase() === identifier.name.toLowerCase();
-
-        const sameSet =
-          !identifier.set ||
-          card.set?.toLowerCase() === identifier.set.toLowerCase();
-
-        const sameCollector =
-          !identifier.collector_number ||
-          card.collector_number === identifier.collector_number;
-
-        return sameName && sameSet && sameCollector;
-      })
+      !uniqueCards.some((card) => cardMatchesIdentifier(card, identifier))
   );
 
   return {
@@ -273,7 +375,15 @@ export async function POST(request: Request) {
 
         const result: ScryfallCollectionResponse = await response.json();
 
-        cards.push(...(result.data ?? []));
+        const resolvedChunkCards = (result.data ?? []).map((card) => {
+          const identifier = chunk.find((item) =>
+            cardMatchesIdentifier(card, item)
+          );
+
+          return identifier ? withRequestedName(card, identifier) : card;
+        });
+
+        cards.push(...resolvedChunkCards);
         notFound.push(...(result.not_found ?? []));
       } catch (error) {
         console.warn(
