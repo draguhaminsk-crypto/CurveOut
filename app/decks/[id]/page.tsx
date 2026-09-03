@@ -1012,6 +1012,14 @@ export default function DeckPage() {
     Set<string>
   >(() => new Set());
   const categoryCardDraggingRef = useRef(false);
+  const stackScrollRef = useRef<HTMLDivElement | null>(null);
+  const stackScrollDragRef = useRef({
+    dragging: false,
+    moved: false,
+    startX: 0,
+    scrollLeft: 0,
+    pointerId: null as number | null,
+  });
   const [tagInput, setTagInput] = useState("");
   const [tagSaving, setTagSaving] = useState(false);
   const [visibilitySaving, setVisibilitySaving] = useState(false);
@@ -6047,13 +6055,88 @@ export default function DeckPage() {
                     {viewMode === "Stack" && (
                       <>
                     <div
-                      className="w-full max-w-full overflow-x-auto overflow-y-visible pb-6 [zoom:0.69] xl:[zoom:0.75] 2xl:[zoom:0.95]"
+                      ref={stackScrollRef}
+                      onPointerDown={(event) => {
+                        if (event.button !== 0 || organizeBy === "Categoria") {
+                          return;
+                        }
+
+                        const target = event.target as HTMLElement;
+
+                        if (
+                          target.closest(
+                            "button, a, input, textarea, select, [data-no-pan='true']"
+                          )
+                        ) {
+                          return;
+                        }
+
+                        const scroller = stackScrollRef.current;
+                        if (!scroller) return;
+
+                        stackScrollDragRef.current = {
+                          dragging: true,
+                          moved: false,
+                          startX: event.clientX,
+                          scrollLeft: scroller.scrollLeft,
+                          pointerId: event.pointerId,
+                        };
+
+                        scroller.setPointerCapture(event.pointerId);
+                      }}
+                      onPointerMove={(event) => {
+                        const drag = stackScrollDragRef.current;
+                        const scroller = stackScrollRef.current;
+
+                        if (!drag.dragging || !scroller) return;
+
+                        const delta = event.clientX - drag.startX;
+
+                        if (Math.abs(delta) > 4) {
+                          drag.moved = true;
+                        }
+
+                        scroller.scrollLeft = drag.scrollLeft - delta;
+                      }}
+                      onPointerUp={(event) => {
+                        const drag = stackScrollDragRef.current;
+                        const scroller = stackScrollRef.current;
+
+                        drag.dragging = false;
+
+                        if (
+                          scroller &&
+                          drag.pointerId !== null &&
+                          scroller.hasPointerCapture(drag.pointerId)
+                        ) {
+                          scroller.releasePointerCapture(drag.pointerId);
+                        }
+
+                        drag.pointerId = null;
+
+                        window.setTimeout(() => {
+                          stackScrollDragRef.current.moved = false;
+                        }, 0);
+                      }}
+                      onPointerCancel={() => {
+                        stackScrollDragRef.current.dragging = false;
+                        stackScrollDragRef.current.moved = false;
+                        stackScrollDragRef.current.pointerId = null;
+                      }}
+                      onClickCapture={(event) => {
+                        if (!stackScrollDragRef.current.moved) return;
+
+                        event.preventDefault();
+                        event.stopPropagation();
+                        stackScrollDragRef.current.moved = false;
+                      }}
+                      className="w-full max-w-full cursor-grab select-none overflow-x-auto overflow-y-visible overscroll-x-contain pb-6 active:cursor-grabbing [scrollbar-width:thin] [zoom:0.69] xl:[zoom:0.75] 2xl:[zoom:0.95]"
                     >
                       <div
                         className={
                           organizeBy === "Categoria"
                             ? "w-full px-1 pt-1 [column-gap:0.5rem] [column-width:215px] lg:[column-width:225px] xl:[column-width:240px] 2xl:[column-width:255px]"
-                            : "flex w-max min-w-full flex-nowrap items-start justify-start gap-x-2 gap-y-10 px-1 pr-8 pt-1"
+                            : "flex w-max min-w-full flex-nowrap items-start justify-start gap-x-3 gap-y-10 px-1 pr-12 pt-1"
                         }
                       >
                         {deckCardsByType.map((group) => (
@@ -6117,7 +6200,7 @@ export default function DeckPage() {
                                       ? "bg-white/[0.045] ring-1 ring-white/25"
                                       : ""
                                   }`
-                                : "w-[215px] shrink-0 lg:w-[225px] xl:w-[240px] 2xl:w-[255px]"
+                                : "w-[235px] shrink-0 lg:w-[245px] xl:w-[265px] 2xl:w-[285px]"
                             }
                           >
                             <div className="mb-3 border-b border-white/10 px-1 pb-2">
@@ -6275,10 +6358,10 @@ export default function DeckPage() {
                                       group/card
                                       relative
                                       mx-auto
-                                      w-[208px]
-                                      lg:w-[218px]
-                                      xl:w-[233px]
-                                      2xl:w-[248px]
+                                      w-[228px]
+                                      lg:w-[238px]
+                                      xl:w-[258px]
+                                      2xl:w-[278px]
                                       transition-all
                                       duration-200
                                       ease-out
@@ -6321,6 +6404,7 @@ export default function DeckPage() {
                                         <img
                                           src={image}
                                           alt={row.card?.name ?? "Carta"}
+                                          draggable={false}
                                           className="block aspect-[63/88] w-full object-cover"
                                         />
                                       ) : (
