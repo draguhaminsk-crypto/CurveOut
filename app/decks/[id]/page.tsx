@@ -465,8 +465,8 @@ const cardTypeGroupOrder: CardTypeGroup[] = [
   "Planeswalkers",
   "Instantâneas",
   "Terrenos",
-  "Feitiços",
   "Outros",
+  "Feitiços",
 ];
 
 const colorGroupOrder = [
@@ -4756,7 +4756,7 @@ export default function DeckPage() {
   }
 
   return (
-    <main className="min-h-screen overflow-x-auto bg-[#0b0b0d] px-3 py-5 text-[#f4f1e8] md:px-4 md:py-8 xl:px-5">
+    <main className="min-h-screen overflow-x-hidden bg-[#0b0b0d] px-3 py-5 text-[#f4f1e8] md:px-4 md:py-8 xl:px-5">
       <div className={editing ? "mx-auto w-full max-w-4xl" : "w-full"}>
         <div className="sticky top-3 z-[75] mb-4 flex items-center">
           {editing ? (
@@ -6044,14 +6044,16 @@ export default function DeckPage() {
                       </div>
                     )}
 
+                    {viewMode === "Stack" && (
+                      <>
                     <div
-                      className="w-full overflow-x-hidden pb-6 [zoom:0.69] xl:[zoom:0.75] 2xl:[zoom:0.95]"
+                      className="w-full max-w-full overflow-x-auto overflow-y-visible pb-6 [zoom:0.69] xl:[zoom:0.75] 2xl:[zoom:0.95]"
                     >
                       <div
                         className={
                           organizeBy === "Categoria"
                             ? "w-full px-1 pt-1 [column-gap:0.5rem] [column-width:215px] lg:[column-width:225px] xl:[column-width:240px] 2xl:[column-width:255px]"
-                            : "flex w-full flex-wrap items-start justify-start gap-x-2 gap-y-10 px-1 pt-1"
+                            : "flex w-max min-w-full flex-nowrap items-start justify-start gap-x-2 gap-y-10 px-1 pr-8 pt-1"
                         }
                       >
                         {deckCardsByType.map((group) => (
@@ -6485,6 +6487,161 @@ export default function DeckPage() {
                         ))}
                       </div>
                     </div>
+                      </>
+                    )}
+
+                    {viewMode === "Linha" && (
+                      <div
+                        className="
+                          grid
+                          grid-cols-[repeat(auto-fit,minmax(250px,1fr))]
+                          gap-3
+                          pb-6
+                        "
+                      >
+                        {deckCardsByType.flatMap((group) =>
+                          group.cards.map((row) => {
+                            const cardImage = getProxiedCardImage(row.card);
+                            const cardName =
+                              row.card?.name ??
+                              `Carta ${row.scryfall_id.slice(0, 8)}…`;
+
+                            return (
+                              <button
+                                key={`${group.name}-${row.scryfall_id}-${row.board}`}
+                                type="button"
+                                onClick={() => {
+                                  setPrintingPickerOpen(false);
+                                  setPrintingOptions([]);
+                                  setPrintingError("");
+                                  openCardDetails(row);
+                                }}
+                                className="
+                                  flex min-w-0 items-center gap-3
+                                  rounded-xl
+                                  border border-white/10
+                                  bg-white/[0.02]
+                                  p-2
+                                  text-left
+                                  transition
+                                  hover:border-white/20
+                                  hover:bg-white/[0.04]
+                                "
+                              >
+                                <div
+                                  className="
+                                    h-[74px] w-[53px]
+                                    shrink-0 overflow-hidden
+                                    rounded-md
+                                    border border-white/10
+                                    bg-[#121216]
+                                  "
+                                >
+                                  {cardImage ? (
+                                    <img
+                                      src={cardImage}
+                                      alt=""
+                                      loading="lazy"
+                                      className="h-full w-full object-cover"
+                                    />
+                                  ) : (
+                                    <div className="flex h-full w-full items-center justify-center px-1 text-center text-[9px] text-white/25">
+                                      Sem imagem
+                                    </div>
+                                  )}
+                                </div>
+
+                                <span
+                                  className="
+                                    flex h-8 min-w-8 shrink-0
+                                    items-center justify-center
+                                    rounded-lg
+                                    border border-white/10
+                                    bg-black/25
+                                    px-2
+                                    text-xs text-white/55
+                                  "
+                                >
+                                  {row.quantity}x
+                                </span>
+
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-medium text-white/75">
+                                    {cardName}
+                                  </p>
+
+                                  <p className="mt-1 truncate text-[10px] uppercase tracking-[0.14em] text-white/25">
+                                    {group.name}
+                                  </p>
+                                </div>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
+
+                    {viewMode === "Texto" && (
+                      <div
+                        className="
+                          grid
+                          grid-cols-[repeat(auto-fit,minmax(220px,1fr))]
+                          gap-2
+                          pb-6
+                        "
+                      >
+                        {deckCardsByType.flatMap((group) =>
+                          group.cards.map((row) => (
+                            <button
+                              key={`${group.name}-${row.scryfall_id}-${row.board}`}
+                              type="button"
+                              onClick={() => {
+                                setPrintingPickerOpen(false);
+                                setPrintingOptions([]);
+                                setPrintingError("");
+                                openCardDetails(row);
+                              }}
+                              className="
+                                flex min-w-0 items-center gap-3
+                                rounded-xl
+                                border border-white/10
+                                bg-white/[0.02]
+                                px-3 py-2.5
+                                text-left
+                                transition
+                                hover:border-white/20
+                                hover:bg-white/[0.04]
+                              "
+                            >
+                              <span
+                                className="
+                                  flex h-7 min-w-7 shrink-0
+                                  items-center justify-center
+                                  rounded-md
+                                  border border-white/10
+                                  bg-black/25
+                                  px-1.5
+                                  text-[11px] text-white/50
+                                "
+                              >
+                                {row.quantity}x
+                              </span>
+
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm text-white/70">
+                                  {row.card?.name ??
+                                    `Carta ${row.scryfall_id.slice(0, 8)}…`}
+                                </p>
+
+                                <p className="mt-0.5 truncate text-[9px] uppercase tracking-[0.14em] text-white/20">
+                                  {group.name}
+                                </p>
+                              </div>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
 
                     {visibleDeckCards.length === 0 && (
                       <p className="py-12 text-sm text-white/30">
