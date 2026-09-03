@@ -6057,7 +6057,7 @@ export default function DeckPage() {
                     <div
                       ref={stackScrollRef}
                       onPointerDown={(event) => {
-                        if (event.button !== 0 || organizeBy === "Categoria") {
+                        if (event.button !== 0) {
                           return;
                         }
 
@@ -6065,7 +6065,7 @@ export default function DeckPage() {
 
                         if (
                           target.closest(
-                            "button, a, input, textarea, select, [data-no-pan='true']"
+                            "button, a, input, textarea, select, [draggable='true'], [data-no-pan='true']"
                           )
                         ) {
                           return;
@@ -6130,15 +6130,9 @@ export default function DeckPage() {
                         event.stopPropagation();
                         stackScrollDragRef.current.moved = false;
                       }}
-                      className="w-full max-w-full cursor-grab select-none overflow-x-auto overflow-y-visible overscroll-x-contain pb-6 active:cursor-grabbing [scrollbar-width:thin] [zoom:0.69] xl:[zoom:0.75] 2xl:[zoom:0.95]"
+                      className="w-full max-w-full cursor-grab select-none overflow-x-auto overflow-y-hidden overscroll-x-contain pb-6 active:cursor-grabbing [scrollbar-width:thin] [zoom:0.69] xl:[zoom:0.75] 2xl:[zoom:0.95]"
                     >
-                      <div
-                        className={
-                          organizeBy === "Categoria"
-                            ? "w-full px-1 pt-1 [column-gap:0.5rem] [column-width:215px] lg:[column-width:225px] xl:[column-width:240px] 2xl:[column-width:255px]"
-                            : "flex w-max min-w-full flex-nowrap items-start justify-start gap-x-3 gap-y-10 px-1 pr-12 pt-1"
-                        }
-                      >
+                      <div className="flex w-max min-w-full flex-nowrap items-start justify-start gap-x-3 gap-y-10 px-1 pr-12 pt-1">
                         {deckCardsByType.map((group) => (
                           <section
                             key={group.name}
@@ -6193,15 +6187,12 @@ export default function DeckPage() {
                                   : group.name
                               );
                             }}
-                            className={
-                              organizeBy === "Categoria"
-                                ? `mb-10 inline-block w-full break-inside-avoid rounded-xl align-top transition ${
-                                    categoryDragOver === group.name
-                                      ? "bg-white/[0.045] ring-1 ring-white/25"
-                                      : ""
-                                  }`
-                                : "w-[235px] shrink-0 lg:w-[245px] xl:w-[265px] 2xl:w-[285px]"
-                            }
+                            className={`w-[235px] shrink-0 rounded-xl transition lg:w-[245px] xl:w-[265px] 2xl:w-[285px] ${
+                              organizeBy === "Categoria" &&
+                              categoryDragOver === group.name
+                                ? "bg-white/[0.045] ring-1 ring-white/25"
+                                : ""
+                            }`}
                           >
                             <div className="mb-3 border-b border-white/10 px-1 pb-2">
                               <div className="flex items-center justify-between gap-3">
@@ -6575,93 +6566,89 @@ export default function DeckPage() {
                     )}
 
                     {viewMode === "Linha" && (
-                      <div
-                        className="
-                          grid
-                          grid-cols-[repeat(auto-fit,minmax(250px,1fr))]
-                          gap-3
-                          pb-6
-                        "
-                      >
-                        {deckCardsByType.flatMap((group) =>
-                          group.cards.map((row) => {
-                            const cardImage = getProxiedCardImage(row.card);
-                            const cardName =
-                              row.card?.name ??
-                              `Carta ${row.scryfall_id.slice(0, 8)}…`;
+                      <div className="space-y-10 pb-8">
+                        {deckCardsByType.map((group) => (
+                          <section key={group.name}>
+                            <div className="mb-3 flex items-center gap-2 px-1">
+                              <h3 className="text-sm font-semibold text-white/80">
+                                {group.name}
+                              </h3>
 
-                            return (
-                              <button
-                                key={`${group.name}-${row.scryfall_id}-${row.board}`}
-                                type="button"
-                                onClick={() => {
-                                  setPrintingPickerOpen(false);
-                                  setPrintingOptions([]);
-                                  setPrintingError("");
-                                  openCardDetails(row);
-                                }}
-                                className="
-                                  flex min-w-0 items-center gap-3
-                                  rounded-xl
-                                  border border-white/10
-                                  bg-white/[0.02]
-                                  p-2
-                                  text-left
-                                  transition
-                                  hover:border-white/20
-                                  hover:bg-white/[0.04]
-                                "
-                              >
-                                <div
-                                  className="
-                                    h-[74px] w-[53px]
-                                    shrink-0 overflow-hidden
-                                    rounded-md
-                                    border border-white/10
-                                    bg-[#121216]
-                                  "
-                                >
-                                  {cardImage ? (
-                                    <img
-                                      src={cardImage}
-                                      alt=""
-                                      loading="lazy"
-                                      className="h-full w-full object-cover"
-                                    />
-                                  ) : (
-                                    <div className="flex h-full w-full items-center justify-center px-1 text-center text-[9px] text-white/25">
-                                      Sem imagem
+                              <span className="text-xs font-medium text-white/35">
+                                ({group.quantity})
+                              </span>
+                            </div>
+
+                            <div
+                              className="
+                                grid
+                                grid-cols-[repeat(auto-fill,minmax(150px,180px))]
+                                items-start
+                                justify-start
+                                gap-x-3 gap-y-5
+                              "
+                            >
+                              {group.cards.map((row) => {
+                                const cardImage = getProxiedCardImage(row.card);
+                                const cardName =
+                                  row.card?.name ??
+                                  `Carta ${row.scryfall_id.slice(0, 8)}…`;
+
+                                return (
+                                  <button
+                                    key={`${group.name}-${row.scryfall_id}-${row.board}`}
+                                    type="button"
+                                    onClick={() => {
+                                      setPrintingPickerOpen(false);
+                                      setPrintingOptions([]);
+                                      setPrintingError("");
+                                      openCardDetails(row);
+                                    }}
+                                    className="
+                                      group/linecard
+                                      relative
+                                      w-full max-w-[180px]
+                                      overflow-hidden
+                                      rounded-[4.8%]
+                                      border border-white/10
+                                      bg-[#121216]
+                                      text-left
+                                      shadow-lg shadow-black/25
+                                      transition
+                                      duration-150
+                                      hover:z-10
+                                      hover:-translate-y-1
+                                      hover:border-white/30
+                                      hover:shadow-xl
+                                    "
+                                  >
+                                    <div className="relative aspect-[488/680] w-full overflow-hidden">
+                                      {cardImage ? (
+                                        <img
+                                          src={cardImage}
+                                          alt={cardName}
+                                          loading="lazy"
+                                          draggable={false}
+                                          className="h-full w-full object-cover"
+                                        />
+                                      ) : (
+                                        <div className="flex h-full w-full items-center justify-center p-4 text-center text-xs text-white/30">
+                                          {cardName}
+                                        </div>
+                                      )}
+
+                                      {row.quantity > 1 && (
+                                        <span className="absolute right-1.5 top-1.5 rounded-md border border-white/10 bg-black/80 px-1.5 py-0.5 text-[10px] font-semibold text-white/80 backdrop-blur-sm">
+                                          {row.quantity}x
+                                        </span>
+                                      )}
                                     </div>
-                                  )}
-                                </div>
-
-                                <span
-                                  className="
-                                    flex h-8 min-w-8 shrink-0
-                                    items-center justify-center
-                                    rounded-lg
-                                    border border-white/10
-                                    bg-black/25
-                                    px-2
-                                    text-xs text-white/55
-                                  "
-                                >
-                                  {row.quantity}x
-                                </span>
-
-                                <div className="min-w-0 flex-1">
-                                  <p className="truncate text-sm font-medium text-white/75">
-                                    {cardName}
-                                  </p>
-
-                                  <p className="mt-1 truncate text-[10px] uppercase tracking-[0.14em] text-white/25">
-                                    {group.name}
-                                  </p>
-                                </div>
-                              </button>
-                            );
-                          })
-                        )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </section>
+                        ))}
                       </div>
                     )}
 
