@@ -6130,7 +6130,7 @@ export default function DeckPage() {
                         event.stopPropagation();
                         stackScrollDragRef.current.moved = false;
                       }}
-                      className="w-full max-w-full cursor-grab select-none overflow-x-auto overflow-y-hidden overscroll-x-contain pb-6 active:cursor-grabbing [scrollbar-width:thin] [zoom:0.69] xl:[zoom:0.75] 2xl:[zoom:0.95]"
+                      className="w-full max-w-full cursor-grab select-none overflow-x-auto overflow-y-hidden overscroll-x-contain pb-6 active:cursor-grabbing [scrollbar-width:thin] [zoom:0.66] lg:[zoom:0.68] xl:[zoom:0.70] 2xl:[zoom:0.72] min-[1900px]:[zoom:0.88]"
                     >
                       <div className="flex w-max min-w-full flex-nowrap items-start justify-start gap-x-3 gap-y-10 px-1 pr-12 pt-1">
                         {deckCardsByType.map((group) => (
@@ -6926,15 +6926,19 @@ export default function DeckPage() {
       className="
         relative
         w-full max-w-5xl
-        overflow-hidden
+        max-h-[calc(100dvh-3rem)]
+        overflow-x-hidden
+        overflow-y-auto
+        overscroll-contain
         rounded-[24px]
         border border-white/10
         bg-[#0d0d10]
         shadow-2xl
+        [scrollbar-width:thin]
       "
     >
       {/* TOPO */}
-      <div className="flex items-start justify-between gap-6 border-b border-white/10 px-8 py-4">
+      <div className="sticky top-0 z-30 flex items-start justify-between gap-6 border-b border-white/10 bg-[#0d0d10]/95 px-8 py-4 backdrop-blur-xl">
         <div>
           <p className="text-[10px] uppercase tracking-[0.22em] text-white/25">
             Detalhes da carta
@@ -7394,194 +7398,231 @@ export default function DeckPage() {
           </div>
         </div>
       </div>
-      {printingPickerOpen && (
-        <div
-          className="
-            absolute inset-0 z-50
-            flex flex-col
-            bg-[#0d0d10]/98
-            backdrop-blur-xl
-          "
-        >
-          <div
-            className="
-              flex items-center justify-between
-              border-b border-white/10
-              px-8 py-5
-            "
-          >
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.2em] text-white/25">
-                Impressões disponíveis
-              </p>
-
-              <h3 className="mt-1 text-xl font-semibold">
-                {selectedCard.card?.name}
-              </h3>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                setPrintingPickerOpen(false);
-                setPrintingSearch("");
-              }}
-              className="
-                flex h-9 w-9 items-center justify-center
-                rounded-xl
-                border border-white/10
-                text-white/40
-                transition
-                hover:bg-white/5
-                hover:text-white
-              "
-            >
-              ×
-            </button>
           </div>
-
-          <div className="border-b border-white/10 px-8 py-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="relative w-full sm:max-w-md">
-                <input
-                  type="search"
-                  value={printingSearch}
-                  onChange={(event) => setPrintingSearch(event.target.value)}
-                  placeholder="Buscar por edição, sigla, número..."
-                  autoComplete="off"
-                  className="
-                    w-full rounded-xl
-                    border border-white/10
-                    bg-[#111114]
-                    px-4 py-3 pr-10
-                    text-sm text-white/75
-                    outline-none transition
-                    placeholder:text-white/20
-                    focus:border-white/25
-                  "
-                />
-
-                <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/20">
-                  ⌕
-                </span>
-              </div>
-
-              {!printingLoading && !printingError && printingOptions.length > 0 && (
-                <p className="shrink-0 text-xs text-white/25">
-                  {printingSearch.trim()
-                    ? `${filteredPrintingOptions.length} de ${printingOptions.length} impressões`
-                    : `${printingOptions.length} impressões`}
-                </p>
-              )}
-            </div>
-
-            <p className="mt-2 text-[10px] leading-4 text-white/20">
-              Ex.: Star Trek, TRK, Hobbit, HOB, #196 ou 2025.
-            </p>
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto px-12 py-8">
-            {printingLoading ? (
-              <div className="flex min-h-[350px] items-center justify-center text-sm text-white/35">
-                Carregando impressões...
-              </div>
-            ) : printingError ? (
-              <div className="flex min-h-[350px] items-center justify-center text-sm text-red-300/70">
-                {printingError}
-              </div>
-            ) : printingOptions.length === 0 ? (
-              <div className="flex min-h-[350px] items-center justify-center text-sm text-white/35">
-                Nenhuma outra impressão encontrada.
-              </div>
-            ) : filteredPrintingOptions.length === 0 ? (
-              <div className="flex min-h-[350px] flex-col items-center justify-center text-center">
-                <p className="text-sm text-white/45">
-                  Nenhuma edição corresponde a “{printingSearch.trim()}”.
-                </p>
-
-                <button
-                  type="button"
-                  onClick={() => setPrintingSearch("")}
-                  className="mt-3 text-xs text-white/30 underline underline-offset-4 transition hover:text-white/60"
-                >
-                  Limpar busca
-                </button>
-              </div>
-            ) : (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {filteredPrintingOptions.map((printing) => {
-                  const selected =
-                    printing.scryfall_id === selectedCard.scryfall_id;
-
-                  const image =
-                    printing.image_uri_large ?? printing.image_uri;
-
-                  return (
-                    <button
-                      key={printing.scryfall_id}
-                      type="button"
-                      disabled={changingPrinting}
-                      onClick={() => {
-                        void changeCardPrinting(printing);
-                      }}
-                      className={`
-                        group rounded-xl border p-3 text-left transition
-                        ${
-                          selected
-                            ? "border-white/35 bg-white/[0.07]"
-                            : "border-white/10 bg-white/[0.02] hover:border-white/25 hover:bg-white/[0.04]"
-                        }
-                        disabled:cursor-wait
-                        disabled:opacity-60
-                      `}
-                    >
-                      <div className="overflow-hidden rounded-[9px] bg-black/30">
-                        {image ? (
-                          <img
-                            src={`/api/scryfall/image?url=${encodeURIComponent(
-                              image
-                            )}`}
-                            alt={printing.name}
-                            className="aspect-[63/88] w-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex aspect-[63/88] items-center justify-center text-xs text-white/25">
-                            Sem imagem
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="mt-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <p className="text-sm font-medium text-white/75">
-                            {printing.set_name}
-                          </p>
-
-                          {selected && (
-                            <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[9px] font-semibold text-black">
-                              ATUAL
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="mt-1 text-xs text-white/30">
-                          {printing.set} · #{printing.collector_number} ·{" "}
-                          {printing.lang}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-    </div>
   </div>
 )}
 
+
+      {printingPickerOpen && selectedCard && (
+        <div
+          className="
+            fixed inset-0 z-[200]
+            flex items-center justify-center
+            bg-black/90
+            px-4 py-5
+            backdrop-blur-md
+          "
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setPrintingPickerOpen(false);
+              setPrintingSearch("");
+            }
+          }}
+        >
+          <div
+            className="
+              flex
+              max-h-[calc(100dvh-2.5rem)]
+              w-full max-w-6xl
+              flex-col
+              overflow-hidden
+              rounded-[24px]
+              border border-white/10
+              bg-[#0d0d10]
+              shadow-2xl
+            "
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div
+              className="
+                flex shrink-0
+                items-center justify-between
+                border-b border-white/10
+                px-6 py-4
+                md:px-8
+              "
+            >
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.2em] text-white/25">
+                  Impressões disponíveis
+                </p>
+
+                <h3 className="mt-1 text-xl font-semibold">
+                  {selectedCard.card?.name}
+                </h3>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPrintingPickerOpen(false);
+                  setPrintingSearch("");
+                }}
+                className="
+                  flex h-9 w-9
+                  items-center justify-center
+                  rounded-xl
+                  border border-white/10
+                  text-white/40
+                  transition
+                  hover:bg-white/5
+                  hover:text-white
+                "
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="shrink-0 border-b border-white/10 px-6 py-4 md:px-8">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="relative w-full sm:max-w-md">
+                  <input
+                    type="search"
+                    value={printingSearch}
+                    onChange={(event) => setPrintingSearch(event.target.value)}
+                    placeholder="Buscar por edição, sigla, número..."
+                    autoComplete="off"
+                    className="
+                      w-full rounded-xl
+                      border border-white/10
+                      bg-[#111114]
+                      px-4 py-3 pr-10
+                      text-sm text-white/75
+                      outline-none transition
+                      placeholder:text-white/20
+                      focus:border-white/25
+                    "
+                  />
+
+                  <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/20">
+                    ⌕
+                  </span>
+                </div>
+
+                {!printingLoading &&
+                  !printingError &&
+                  printingOptions.length > 0 && (
+                    <p className="shrink-0 text-xs text-white/25">
+                      {printingSearch.trim()
+                        ? `${filteredPrintingOptions.length} de ${printingOptions.length} impressões`
+                        : `${printingOptions.length} impressões`}
+                    </p>
+                  )}
+              </div>
+
+              <p className="mt-2 text-[10px] leading-4 text-white/20">
+                Ex.: Star Trek, TRK, Hobbit, HOB, #196 ou 2025.
+              </p>
+            </div>
+
+            <div
+              className="
+                min-h-0 flex-1
+                overflow-y-auto
+                overscroll-contain
+                px-5 py-5
+                md:px-8
+                [scrollbar-width:thin]
+              "
+            >
+              {printingLoading ? (
+                <div className="flex min-h-[300px] items-center justify-center text-sm text-white/35">
+                  Carregando impressões...
+                </div>
+              ) : printingError ? (
+                <div className="flex min-h-[300px] items-center justify-center text-sm text-red-300/70">
+                  {printingError}
+                </div>
+              ) : printingOptions.length === 0 ? (
+                <div className="flex min-h-[300px] items-center justify-center text-sm text-white/35">
+                  Nenhuma outra impressão encontrada.
+                </div>
+              ) : filteredPrintingOptions.length === 0 ? (
+                <div className="flex min-h-[300px] flex-col items-center justify-center text-center">
+                  <p className="text-sm text-white/45">
+                    Nenhuma edição corresponde a “{printingSearch.trim()}”.
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => setPrintingSearch("")}
+                    className="mt-3 text-xs text-white/30 underline underline-offset-4 transition hover:text-white/60"
+                  >
+                    Limpar busca
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                  {filteredPrintingOptions.map((printing) => {
+                    const selected =
+                      printing.scryfall_id === selectedCard.scryfall_id;
+
+                    const image =
+                      printing.image_uri_large ?? printing.image_uri;
+
+                    return (
+                      <button
+                        key={printing.scryfall_id}
+                        type="button"
+                        disabled={changingPrinting}
+                        onClick={() => {
+                          void changeCardPrinting(printing);
+                        }}
+                        className={`
+                          group rounded-xl border p-2.5 text-left transition
+                          ${
+                            selected
+                              ? "border-white/35 bg-white/[0.07]"
+                              : "border-white/10 bg-white/[0.02] hover:border-white/25 hover:bg-white/[0.04]"
+                          }
+                          disabled:cursor-wait
+                          disabled:opacity-60
+                        `}
+                      >
+                        <div className="overflow-hidden rounded-[9px] bg-black/30">
+                          {image ? (
+                            <img
+                              src={`/api/scryfall/image?url=${encodeURIComponent(
+                                image
+                              )}`}
+                              alt={printing.name}
+                              loading="lazy"
+                              className="aspect-[63/88] w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex aspect-[63/88] items-center justify-center text-xs text-white/25">
+                              Sem imagem
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="mt-2.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="line-clamp-2 text-xs font-medium text-white/75">
+                              {printing.set_name}
+                            </p>
+
+                            {selected && (
+                              <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[8px] font-semibold text-black">
+                                ATUAL
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="mt-1 text-[10px] text-white/30">
+                            {printing.set} · #{printing.collector_number} ·{" "}
+                            {printing.lang}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {undoLabel && (
         <div className="fixed bottom-5 left-1/2 z-[120] flex -translate-x-1/2 items-center gap-4 rounded-xl border border-white/15 bg-[#111114]/95 px-4 py-3 shadow-2xl shadow-black/50 backdrop-blur-xl">

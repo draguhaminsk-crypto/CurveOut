@@ -330,6 +330,11 @@ export default function CollectionPage() {
   const [addResults, setAddResults] = useState<CardMeta[]>([]);
   const [addSearching, setAddSearching] = useState(false);
   const [addError, setAddError] = useState("");
+
+  // Quando a coleção está vazia, o campo principal também consulta o catálogo.
+  const [catalogResults, setCatalogResults] = useState<CardMeta[]>([]);
+  const [catalogSearching, setCatalogSearching] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
   const [addTargetCollectionId, setAddTargetCollectionId] = useState("");
   const [addCondition, setAddCondition] =
     useState<CardCondition>("NM");
@@ -847,6 +852,72 @@ export default function CollectionPage() {
     collections,
   ]);
 
+  useEffect(() => {
+    const query = search.trim();
+
+    // O campo principal continua filtrando a coleção normalmente.
+    // O catálogo só entra em cena quando a coleção/aba atual está vazia.
+    if (scopedCards.length > 0 || query.length < 2) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const timer = window.setTimeout(async () => {
+      setCatalogSearching(true);
+      setCatalogError("");
+
+      const escapedQuery = query
+        .replaceAll("%", "\\%")
+        .replaceAll("_", "\\_");
+
+      const { data, error } = await supabase
+        .from("cards")
+        .select(
+          "scryfall_id, oracle_id, name, type_line, color_identity, image_uri, image_uri_large, card_data"
+        )
+        .ilike("name", `%${escapedQuery}%`)
+        .limit(36);
+
+      if (cancelled) return;
+
+      if (error) {
+        console.error("Erro ao pesquisar catálogo pela coleção:", error);
+        setCatalogResults([]);
+        setCatalogError("Não foi possível pesquisar o catálogo agora.");
+        setCatalogSearching(false);
+        return;
+      }
+
+      const normalized = query.toLocaleLowerCase("pt-BR");
+
+      const results = ((data ?? []) as CardCatalogRow[])
+        .map(resolveCard)
+        .sort((a, b) => {
+          const aName = a.name.toLocaleLowerCase("pt-BR");
+          const bName = b.name.toLocaleLowerCase("pt-BR");
+          const aStarts = aName.startsWith(normalized);
+          const bStarts = bName.startsWith(normalized);
+
+          if (aStarts !== bStarts) return aStarts ? -1 : 1;
+          if (a.name !== b.name) {
+            return a.name.localeCompare(b.name, "pt-BR");
+          }
+
+          return b.released_at.localeCompare(a.released_at);
+        })
+        .slice(0, 18);
+
+      setCatalogResults(results);
+      setCatalogSearching(false);
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [search, scopedCards.length, supabase]);
+
   const hasFilters =
     Boolean(search.trim()) ||
     colorFilter !== "Todas" ||
@@ -1006,31 +1077,60 @@ export default function CollectionPage() {
     setSelectedIds(new Set());
   }
 
-  async function addCard(card: CardMeta) {
-    if (!userId || addingId || !addTargetCollectionId) return;
+  async function addCard(
+    card: CardMeta,
+    options?: {
+      targetCollectionId?: string;
+      condition?: CardCondition;
+      language?: string;
+      finish?: Finish;
+      quick?: boolean;
+    }
+  ) {
+    const targetCollectionId =
+      options?.targetCollectionId ?? addTargetCollectionId;
+    const condition = options?.condition ?? addCondition;
+    const languagePreference = options?.language ?? addLanguage;
+    const finish = options?.finish ?? addFinish;
+    const quick = options?.quick ?? false;
+
+    const reportError = (message: string) => {
+      if (quick) setErrorMessage(message);
+      else setAddError(message);
+    };
+
+    if (!userId || addingId || !targetCollectionId) {
+      if (!targetCollectionId) {
+        reportError("Crie ou selecione uma coleção antes de adicionar uma carta.");
+      }
+      return;
+    }
 
     const targetCollection = collections.find(
-      (collection) => collection.id === addTargetCollectionId
+      (collection) => collection.id === targetCollectionId
     );
 
     if (!targetCollection) {
-      setAddError("Escolha uma coleção ou lista de desejos.");
+      reportError("Escolha uma coleção ou lista de desejos.");
       return;
     }
 
     setAddingId(card.scryfall_id);
-    setAddError("");
+    if (quick) setErrorMessage("");
+    else setAddError("");
 
     const language =
-      addLanguage === "auto" ? card.lang || "en" : addLanguage;
+      languagePreference === "auto"
+        ? card.lang || "en"
+        : languagePreference;
 
     const existing = cards.find(
       (row) =>
-        row.collection_id === addTargetCollectionId &&
+        row.collection_id === targetCollectionId &&
         row.scryfall_id === card.scryfall_id &&
         row.language === language &&
-        row.finish === addFinish &&
-        row.card_condition === addCondition
+        row.finish === finish &&
+        row.card_condition === condition
     );
 
     if (existing) {
@@ -1044,7 +1144,7 @@ export default function CollectionPage() {
         .eq("owner_id", userId);
 
       if (error) {
-        setAddError("Não foi possível aumentar a quantidade.");
+        reportError("Não foi possível aumentar a quantidade.");
         setAddingId(null);
         return;
       }
@@ -1065,13 +1165,13 @@ export default function CollectionPage() {
       .from("user_collection_cards")
       .insert({
         owner_id: userId,
-        collection_id: addTargetCollectionId,
+        collection_id: targetCollectionId,
         scryfall_id: card.scryfall_id,
         oracle_id: card.oracle_id,
         quantity: 1,
         language,
-        finish: addFinish,
-        card_condition: addCondition,
+        finish,
+        card_condition: condition,
       })
       .select(
         "id, owner_id, collection_id, scryfall_id, oracle_id, quantity, language, finish, card_condition, created_at, updated_at"
@@ -1079,7 +1179,7 @@ export default function CollectionPage() {
       .single();
 
     if (error || !data) {
-      setAddError(error?.message ?? "Não foi possível adicionar a carta.");
+      reportError(error?.message ?? "Não foi possível adicionar a carta.");
       setAddingId(null);
       return;
     }
@@ -1090,6 +1190,25 @@ export default function CollectionPage() {
     ]);
 
     setAddingId(null);
+  }
+
+  function quickAddCard(card: CardMeta) {
+    const targetCollectionId = defaultTargetCollection();
+
+    if (!targetCollectionId) {
+      setErrorMessage(
+        "Crie uma coleção antes de adicionar sua primeira carta."
+      );
+      return;
+    }
+
+    void addCard(card, {
+      targetCollectionId,
+      condition: "NM",
+      language: "auto",
+      finish: "normal",
+      quick: true,
+    });
   }
 
   async function changeQuantity(row: CollectionCard, quantity: number) {
@@ -1550,12 +1669,21 @@ export default function CollectionPage() {
         <section className="mt-9 border-t border-white/10 pt-7">
           <div className="grid gap-3 xl:grid-cols-[minmax(260px,1fr)_130px_155px_135px_135px_135px_135px]">
             <div>
-              <Label>Procurar</Label>
+              <Label>Procurar na coleção ou catálogo</Label>
               <input
                 type="search"
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Nome, edição, coleção, idioma..."
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setSearch(value);
+
+                  if (value.trim().length < 2) {
+                    setCatalogResults([]);
+                    setCatalogSearching(false);
+                    setCatalogError("");
+                  }
+                }}
+                placeholder="Nome da carta, edição, coleção, idioma..."
                 className="w-full rounded-xl border border-white/10 bg-[#111114] px-4 py-3 text-sm text-white/70 outline-none transition placeholder:text-white/20 focus:border-white/25"
               />
             </div>
@@ -1799,10 +1927,111 @@ export default function CollectionPage() {
           )}
 
           {scopedCards.length === 0 ? (
-            <EmptyCollection
-              wishlist={activeCollection?.kind === "wishlist"}
-              onAdd={openAddModal}
-            />
+            search.trim().length >= 2 ? (
+              <div className="mt-8">
+                <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-[#c8b27a]/45">
+                      Catálogo CurveOut
+                    </p>
+                    <h3 className="mt-1 text-lg font-semibold text-white/70">
+                      Resultados para “{search.trim()}”
+                    </h3>
+                    <p className="mt-1 text-xs text-white/25">
+                      Sua coleção está vazia, então estamos procurando também no catálogo de cartas.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={openAddModal}
+                    className="rounded-lg border border-white/10 px-3 py-2 text-xs text-white/40 transition hover:border-white/20 hover:text-white/70"
+                  >
+                    Busca avançada de impressão
+                  </button>
+                </div>
+
+                {catalogSearching ? (
+                  <div className="rounded-2xl border border-dashed border-white/10 px-6 py-14 text-center text-sm text-white/30">
+                    Procurando no catálogo...
+                  </div>
+                ) : catalogError ? (
+                  <div className="rounded-2xl border border-red-300/10 bg-red-300/[0.025] px-6 py-10 text-center text-sm text-red-100/55">
+                    {catalogError}
+                  </div>
+                ) : catalogResults.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-white/10 px-6 py-14 text-center">
+                    <p className="text-sm text-white/35">
+                      Nenhuma carta encontrada no catálogo.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={openAddModal}
+                      className="mt-4 text-xs text-white/35 underline underline-offset-4 transition hover:text-white/65"
+                    >
+                      Tentar pela busca de impressões
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                    {catalogResults.map((card) => {
+                      const image = proxyImage(card.image);
+                      const targetCollection =
+                        activeCollection ?? physicalCollections[0] ?? collections[0] ?? null;
+
+                      return (
+                        <article
+                          key={card.scryfall_id}
+                          className="group min-w-0 overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.015]"
+                        >
+                          <div className="aspect-[488/680] overflow-hidden bg-[#121216]">
+                            {image ? (
+                              <img
+                                src={image}
+                                alt={card.name}
+                                loading="lazy"
+                                className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.015]"
+                              />
+                            ) : (
+                              <div className="flex h-full items-center justify-center px-4 text-center text-xs text-white/25">
+                                {card.name}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="p-3">
+                            <p className="truncate text-sm font-medium text-white/70">
+                              {card.name}
+                            </p>
+                            <p className="mt-1 truncate text-[10px] uppercase tracking-[0.12em] text-white/25">
+                              {card.set_name} · {card.set.toUpperCase()} #{card.collector_number}
+                            </p>
+
+                            <button
+                              type="button"
+                              disabled={addingId === card.scryfall_id || !targetCollection}
+                              onClick={() => quickAddCard(card)}
+                              className="mt-3 w-full rounded-lg bg-[#f4f1e8] px-3 py-2 text-xs font-semibold text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35"
+                            >
+                              {addingId === card.scryfall_id
+                                ? "Adicionando..."
+                                : targetCollection
+                                  ? `+ Adicionar à ${targetCollection.name}`
+                                  : "Crie uma coleção primeiro"}
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <EmptyCollection
+                wishlist={activeCollection?.kind === "wishlist"}
+                onAdd={openAddModal}
+              />
+            )
           ) : visibleCards.length === 0 ? (
             <div className="mt-8 rounded-2xl border border-dashed border-white/10 px-6 py-14 text-center text-sm text-white/30">
               Nenhuma carta corresponde aos filtros atuais.
