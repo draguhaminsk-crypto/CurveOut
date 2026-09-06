@@ -5656,7 +5656,8 @@ export default function DeckPage() {
               <div className="overflow-visible border-b border-white/10">
                 <div
                   className={`
-                    relative z-20
+                    relative
+                    ${cardSearchOpen ? "z-[90]" : "z-20"}
                     grid min-w-[1100px] gap-3 p-3
                     ${
                       isOwner
@@ -5750,7 +5751,7 @@ export default function DeckPage() {
                     {cardSearchOpen && cardSearchResults.length > 0 && (
                       <div
                         className="
-                          absolute left-0 right-0 top-full z-50 mt-2
+                          absolute left-0 right-0 top-full z-[95] mt-2
                           max-h-80 overflow-y-auto rounded-xl
                           border border-white/10 bg-[#111114]/95
                           p-1.5 shadow-2xl backdrop-blur-xl
