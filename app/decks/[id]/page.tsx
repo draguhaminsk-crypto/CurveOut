@@ -2461,10 +2461,7 @@ export default function DeckPage() {
           return {
             name: groupName,
             cards,
-            quantity: cards.reduce(
-              (total, row) => total + row.quantity,
-              0
-            ),
+            quantity: cards.length,
           };
         })
         .filter(
@@ -2498,10 +2495,7 @@ export default function DeckPage() {
         return {
           name: groupName,
           cards,
-          quantity: cards.reduce(
-            (total, row) => total + row.quantity,
-            0
-          ),
+          quantity: cards.length,
         };
       })
       .filter((group) => group.cards.length > 0);
@@ -4776,12 +4770,15 @@ export default function DeckPage() {
               ← Voltar para o deck
             </button>
           ) : (
-            <Link
-              href={isOwner ? "/meus-decks" : "/"}
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-[#0b0b0d]/90 px-3.5 py-2 text-xs font-medium text-white/55 shadow-xl shadow-black/20 backdrop-blur-xl transition hover:border-white/25 hover:text-white"
-            >
-              {isOwner ? "← Voltar para meus decks" : "← CurveOut"}
-            </Link>
+            <button
+  type="button"
+  onClick={() => {
+    window.location.href = isOwner ? "/meus-decks" : "/";
+  }}
+  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-[#0b0b0d]/90 px-3.5 py-2 text-xs font-medium text-white/55 shadow-xl shadow-black/20 backdrop-blur-xl transition hover:border-white/25 hover:text-white"
+>
+  {isOwner ? "← Voltar para meus decks" : "← CurveOut"}
+</button>
           )}
         </div>
 
@@ -7420,6 +7417,67 @@ export default function DeckPage() {
             }
           }}
         >
+          {/* NAVEGAÇÃO ENTRE CARTAS NO MODAL DE IMPRESSÕES */}
+          <button
+            type="button"
+            aria-label="Carta anterior"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={() => {
+              void navigatePrintingCard(-1);
+            }}
+            disabled={!hasPreviousSelectedCard || changingPrinting}
+            className="
+              absolute left-2 top-1/2 z-[220]
+              flex h-11 w-11 -translate-y-1/2 items-center justify-center
+              rounded-full
+              border border-white/15
+              bg-black/85
+              text-3xl font-light text-white/75
+              shadow-2xl
+              backdrop-blur-md
+              transition
+              hover:border-white/30
+              hover:bg-black
+              hover:text-white
+              disabled:cursor-default
+              disabled:opacity-20
+              md:left-4
+              xl:left-6
+            "
+          >
+            ‹
+          </button>
+
+          <button
+            type="button"
+            aria-label="Próxima carta"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={() => {
+              void navigatePrintingCard(1);
+            }}
+            disabled={!hasNextSelectedCard || changingPrinting}
+            className="
+              absolute right-2 top-1/2 z-[220]
+              flex h-11 w-11 -translate-y-1/2 items-center justify-center
+              rounded-full
+              border border-white/15
+              bg-black/85
+              text-3xl font-light text-white/75
+              shadow-2xl
+              backdrop-blur-md
+              transition
+              hover:border-white/30
+              hover:bg-black
+              hover:text-white
+              disabled:cursor-default
+              disabled:opacity-20
+              md:right-4
+              xl:right-6
+            "
+          >
+            ›
+          </button>
+
           <div
             className="
               flex
