@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase/client";
 
@@ -985,6 +985,281 @@ function CurveOutSelect({
   );
 }
 
+
+type DeckSearchFieldProps = {
+  value: string;
+  onValueChange: (value: string) => void;
+};
+
+const DeckSearchField = memo(function DeckSearchField({
+  value,
+  onValueChange,
+}: DeckSearchFieldProps) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const timeoutRef = useRef<number | null>(null);
+  const lastSentValueRef = useRef(value);
+
+  useEffect(() => {
+    if (value === lastSentValueRef.current) return;
+
+    lastSentValueRef.current = value;
+
+    if (inputRef.current && inputRef.current.value !== value) {
+      inputRef.current.value = value;
+    }
+  }, [value]);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  return (
+    <div>
+      <label
+        htmlFor="deck-search"
+        className="mb-2 block px-1 text-[11px] uppercase tracking-[0.16em] text-white/25"
+      >
+        Procurar no deck
+      </label>
+
+      <div className="relative">
+        <input
+          ref={inputRef}
+          id="deck-search"
+          type="search"
+          defaultValue={value}
+          onChange={(event) => {
+            const nextValue = event.currentTarget.value;
+
+            if (timeoutRef.current !== null) {
+              window.clearTimeout(timeoutRef.current);
+            }
+
+            timeoutRef.current = window.setTimeout(() => {
+              lastSentValueRef.current = nextValue;
+              onValueChange(nextValue);
+            }, 120);
+          }}
+          placeholder="Nome, tipo, texto, categoria, cor..."
+          className="
+            w-full rounded-xl
+            border border-white/10
+            bg-[#0f0f12]
+            px-4 py-3 pr-10
+            text-sm text-white
+            outline-none transition
+            placeholder:text-white/25
+            focus:border-white/30
+          "
+        />
+
+        <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/25">
+          ⌕
+        </span>
+      </div>
+    </div>
+  );
+});
+
+type CardSearchFieldProps = {
+  value: string;
+  activeBoardTitle: string;
+  results: string[];
+  open: boolean;
+  loading: boolean;
+  adding: boolean;
+  error: string;
+  status: string;
+  highlightedIndex: number;
+  onValueChange: (value: string) => void;
+  onOpenChange: (value: boolean) => void;
+  onResultsChange: (value: string[]) => void;
+  onErrorChange: (value: string) => void;
+  onStatusChange: (value: string) => void;
+  onHighlightedIndexChange: (value: number | ((current: number) => number)) => void;
+  onAddCard: (cardName: string) => Promise<void>;
+};
+
+const CardSearchField = memo(function CardSearchField({
+  value,
+  activeBoardTitle,
+  results,
+  open,
+  loading,
+  adding,
+  error,
+  status,
+  highlightedIndex,
+  onValueChange,
+  onOpenChange,
+  onResultsChange,
+  onErrorChange,
+  onStatusChange,
+  onHighlightedIndexChange,
+  onAddCard,
+}: CardSearchFieldProps) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const timeoutRef = useRef<number | null>(null);
+  const lastSentValueRef = useRef(value);
+
+  useEffect(() => {
+    if (value === lastSentValueRef.current) return;
+
+    lastSentValueRef.current = value;
+
+    if (inputRef.current && inputRef.current.value !== value) {
+      inputRef.current.value = value;
+    }
+  }, [value]);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  return (
+    <div>
+      <label
+        htmlFor="card-search"
+        className="mb-2 block px-1 text-[11px] uppercase tracking-[0.16em] text-white/25"
+      >
+        Adicionar em {activeBoardTitle}
+      </label>
+
+      <div className="relative">
+        <input
+          ref={inputRef}
+          id="card-search"
+          type="search"
+          defaultValue={value}
+          autoComplete="off"
+          onFocus={() => {
+            if (results.length > 0) {
+              onOpenChange(true);
+            }
+          }}
+          onChange={(event) => {
+            const nextValue = event.currentTarget.value;
+
+            if (timeoutRef.current !== null) {
+              window.clearTimeout(timeoutRef.current);
+            }
+
+            timeoutRef.current = window.setTimeout(() => {
+              lastSentValueRef.current = nextValue;
+              onErrorChange("");
+              onStatusChange("");
+              onValueChange(nextValue);
+
+              if (nextValue.trim().length < 2) {
+                onResultsChange([]);
+                onOpenChange(false);
+                onHighlightedIndexChange(0);
+              }
+            }, 120);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              onOpenChange(false);
+              return;
+            }
+
+            if (event.key === "ArrowDown" && results.length > 0) {
+              event.preventDefault();
+              onOpenChange(true);
+              onHighlightedIndexChange((current) =>
+                Math.min(current + 1, results.length - 1)
+              );
+              return;
+            }
+
+            if (event.key === "ArrowUp" && results.length > 0) {
+              event.preventDefault();
+              onOpenChange(true);
+              onHighlightedIndexChange((current) => Math.max(current - 1, 0));
+              return;
+            }
+
+            if (event.key === "Enter" && open && results.length > 0) {
+              event.preventDefault();
+              const selected = results[highlightedIndex];
+              if (selected) {
+                void onAddCard(selected);
+              }
+            }
+          }}
+          placeholder="Procurar carta..."
+          className="
+            w-full rounded-xl
+            border border-white/10
+            bg-[#0f0f12]
+            px-4 py-3 pr-10
+            text-sm text-white
+            outline-none transition
+            placeholder:text-white/25
+            focus:border-white/30
+          "
+        />
+
+        <span className="pointer-events-none absolute right-4 top-[23px] -translate-y-1/2 text-white/25">
+          {loading || adding ? "…" : "⌕"}
+        </span>
+
+        {open && results.length > 0 && (
+          <div
+            className="
+              absolute left-0 right-0 top-full z-[95] mt-2
+              max-h-80 overflow-y-auto rounded-xl
+              border border-white/10 bg-[#111114]/95
+              p-1.5 shadow-2xl backdrop-blur-xl
+            "
+          >
+            {results.map((suggestion, index) => (
+              <button
+                key={suggestion}
+                type="button"
+                onMouseEnter={() => onHighlightedIndexChange(index)}
+                onClick={() => {
+                  void onAddCard(suggestion);
+                }}
+                className={`
+                  block w-full rounded-lg px-3 py-2.5 text-left text-sm transition
+                  ${
+                    highlightedIndex === index
+                      ? "bg-white/[0.09] text-white"
+                      : "text-white/60 hover:bg-white/[0.06] hover:text-white"
+                  }
+                `}
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {error && (
+          <p className="mt-2 px-1 text-[11px] text-red-300/70">
+            {error}
+          </p>
+        )}
+
+        {status && (
+          <p className="mt-2 px-1 text-[11px] text-emerald-300/70">
+            {status}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+});
+
 export default function DeckPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -1035,6 +1310,8 @@ export default function DeckPage() {
   const [addingCard, setAddingCard] = useState(false);
   const [highlightedCardIndex, setHighlightedCardIndex] = useState(0);
   const [deckSearch, setDeckSearch] = useState("");
+  const deferredCardSearch = useDeferredValue(cardSearch);
+  const deferredDeckSearch = useDeferredValue(deckSearch);
   const [deckCards, setDeckCards] = useState<DeckCardRow[]>([]);
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [ownedCollectionByCard, setOwnedCollectionByCard] = useState<
@@ -1053,6 +1330,7 @@ export default function DeckPage() {
   const [printingOptions, setPrintingOptions] =
     useState<CardPrinting[]>([]);
   const [printingSearch, setPrintingSearch] = useState("");
+  const deferredPrintingSearch = useDeferredValue(printingSearch);
   const [printingLoading, setPrintingLoading] =
     useState(false);
   const [changingPrinting, setChangingPrinting] =
@@ -1148,6 +1426,7 @@ export default function DeckPage() {
   const [updateDeckError, setUpdateDeckError] = useState("");
   const [importDeckOpen, setImportDeckOpen] = useState(false);
   const [importText, setImportText] = useState("");
+  const deferredImportText = useDeferredValue(importText);
   const [importingDeck, setImportingDeck] = useState(false);
   const [importDeckError, setImportDeckError] = useState("");
   const [exportDeckOpen, setExportDeckOpen] = useState(false);
@@ -2049,8 +2328,8 @@ export default function DeckPage() {
   }
 
   const parsedImport = useMemo(
-    () => parseImportList(importText),
-    [importText]
+    () => parseImportList(deferredImportText),
+    [deferredImportText]
   );
 
   const primaryDeckCards = useMemo(
@@ -2182,7 +2461,7 @@ export default function DeckPage() {
         : boardCounts.deck;
 
   const visibleDeckCards = useMemo(() => {
-    const search = deckSearch.trim().toLocaleLowerCase("pt-BR");
+    const search = deferredDeckSearch.trim().toLocaleLowerCase("pt-BR");
 
     if (!search) return activeBoardRows;
 
@@ -2216,7 +2495,7 @@ export default function DeckPage() {
 
       return haystack.includes(search);
     });
-  }, [activeBoardRows, deckSearch]);
+  }, [activeBoardRows, deferredDeckSearch]);
 
   const deckStats = useMemo(() => {
     const nonCommanderCards = primaryDeckCards.filter(
@@ -2422,7 +2701,7 @@ export default function DeckPage() {
 
   const deckCardsByType = useMemo(() => {
     if (organizeBy === "Categoria") {
-      const hasSearch = deckSearch.trim().length > 0;
+      const hasSearch = deferredDeckSearch.trim().length > 0;
 
       const groupNames: string[] = [];
 
@@ -2504,7 +2783,7 @@ export default function DeckPage() {
     organizeBy,
     customCategories,
     isOwner,
-    deckSearch,
+    deferredDeckSearch,
   ]);
 
   const cardNavigationOrder = useMemo(
@@ -2601,7 +2880,10 @@ export default function DeckPage() {
   ]);
 
 
-  async function loadDeckCards(deckId: string) {
+  async function loadDeckCards(
+    deckId: string,
+    preferenceUserId: string | null = viewerId
+  ) {
     const { data, error } = await supabase
       .from("deck_cards")
       .select(
@@ -2620,6 +2902,43 @@ export default function DeckPage() {
     if (rows.length === 0) {
       setDeckCards([]);
       return;
+    }
+
+    // Preferência visual de impressão é POR USUÁRIO.
+    // Nunca alteramos deck_cards apenas porque alguém escolheu outra arte.
+    const personalPrintingByDeckCardId = new Map<string, CardPrinting>();
+
+    if (preferenceUserId) {
+      const deckCardIds = rows
+        .map((row) => row.id)
+        .filter((id): id is string => Boolean(id));
+
+      if (deckCardIds.length > 0) {
+        const { data: preferenceData, error: preferenceError } = await supabase
+          .from("user_deck_card_printings")
+          .select("deck_card_id, printing_data")
+          .eq("user_id", preferenceUserId)
+          .in("deck_card_id", deckCardIds);
+
+        if (preferenceError) {
+          console.warn(
+            "Não foi possível carregar preferências pessoais de impressão:",
+            preferenceError.message
+          );
+        } else {
+          for (const preference of (preferenceData ?? []) as Array<{
+            deck_card_id: string;
+            printing_data: CardPrinting | null;
+          }>) {
+            if (preference.deck_card_id && preference.printing_data) {
+              personalPrintingByDeckCardId.set(
+                preference.deck_card_id,
+                preference.printing_data
+              );
+            }
+          }
+        }
+      }
     }
 
     const scryfallIds = Array.from(
@@ -2809,11 +3128,19 @@ export default function DeckPage() {
     setDeckCards(
       rows.map((row) => {
         const resolvedCard = cardsById.get(row.scryfall_id);
+        const personalPrinting = row.id
+          ? personalPrintingByDeckCardId.get(row.id) ?? null
+          : null;
+
+        // Se o usuário tiver preferência, ela vence apenas na visualização dele.
+        // printing_data do deck continua servindo apenas como snapshot legado/base.
+        const effectivePrinting = personalPrinting ?? row.printing_data ?? null;
 
         return {
           ...row,
-          card: row.printing_data
-            ? applyPrintingSnapshot(resolvedCard, row.printing_data)
+          printing_data: effectivePrinting,
+          card: effectivePrinting
+            ? applyPrintingSnapshot(resolvedCard, effectivePrinting)
             : resolvedCard,
         };
       })
@@ -2821,7 +3148,7 @@ export default function DeckPage() {
   }
 
   useEffect(() => {
-    const query = cardSearch.trim();
+    const query = deferredCardSearch.trim();
 
     if (query.length < 2) return;
 
@@ -2916,7 +3243,7 @@ export default function DeckPage() {
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [cardSearch, supabase]);
+  }, [deferredCardSearch, supabase]);
 
   async function addMissingCardsToWishlist() {
     if (
@@ -3275,7 +3602,7 @@ export default function DeckPage() {
         }
       }
 
-      await loadDeckCards(data.id);
+      await loadDeckCards(data.id, user?.id ?? null);
 
       setLoading(false);
     }
@@ -3325,7 +3652,7 @@ export default function DeckPage() {
   }, [priceOpen, problemsOpen]);
 
   const filteredPrintingOptions = useMemo(() => {
-    const normalizedQuery = printingSearch
+    const normalizedQuery = deferredPrintingSearch
       .trim()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
@@ -3352,7 +3679,7 @@ export default function DeckPage() {
 
       return searchableText.includes(normalizedQuery);
     });
-  }, [printingOptions, printingSearch]);
+  }, [printingOptions, deferredPrintingSearch]);
 
   async function loadCardPrintings(row: DeckCardRow) {
     const oracleId = row.oracle_id ?? row.card?.oracle_id;
@@ -3389,51 +3716,8 @@ export default function DeckPage() {
         return;
       }
 
-      const printings = result.printings ?? [];
-      setPrintingOptions(printings);
-
-      const currentPrinting = printings.find(
-        (printing) => printing.scryfall_id === row.scryfall_id
-      );
-
-      if (currentPrinting && row.id && isOwner) {
-        const { error: snapshotError } = await supabase
-          .from("deck_cards")
-          .update({ printing_data: currentPrinting })
-          .eq("id", row.id);
-
-        if (!snapshotError) {
-          setDeckCards((current) =>
-            current.map((cardRow) =>
-              cardRow.id === row.id
-                ? {
-                    ...cardRow,
-                    printing_data: currentPrinting,
-                    card: applyPrintingSnapshot(
-                      cardRow.card,
-                      currentPrinting
-                    ),
-                  }
-                : cardRow
-            )
-          );
-
-          setSelectedCard((current) => {
-            if (!current || current.id !== row.id) {
-              return current;
-            }
-
-            return {
-              ...current,
-              printing_data: currentPrinting,
-              card: applyPrintingSnapshot(
-                current.card,
-                currentPrinting
-              ),
-            };
-          });
-        }
-      }
+      // Apenas carrega as opções. Abrir o modal NÃO altera o deck.
+      setPrintingOptions(result.printings ?? []);
     } catch (error) {
       console.error("Erro ao carregar impressões:", error);
       setPrintingError(
@@ -3444,34 +3728,58 @@ export default function DeckPage() {
     }
   }
 
+
   async function changeCardPrinting(printing: CardPrinting) {
-    if (
-      !deck ||
-      !selectedCard ||
-      !selectedCard.id ||
-      !isOwner ||
-      changingPrinting
-    ) {
+    if (!deck || !selectedCard || !selectedCard.id || changingPrinting) {
       return;
     }
 
-    if (printing.scryfall_id === selectedCard.scryfall_id) {
-      setChangingPrinting(true);
-      setPrintingError("");
+    if (!viewerId) {
+      setPrintingError(
+        "Entre na sua conta para salvar sua impressão preferida."
+      );
+      return;
+    }
 
-      const { error: snapshotError } = await supabase
-        .from("deck_cards")
-        .update({ printing_data: printing })
-        .eq("id", selectedCard.id);
+    setChangingPrinting(true);
+    setPrintingError("");
 
-      if (snapshotError) {
-        console.error("Erro ao salvar impressão selecionada:", snapshotError);
-        setPrintingError("Não foi possível aplicar esta impressão.");
-        setChangingPrinting(false);
-        return;
+    try {
+      // Se escolher a impressão-base do deck, removemos a preferência pessoal.
+      // Assim o usuário volta a acompanhar o padrão daquele deck.
+      if (printing.scryfall_id === selectedCard.scryfall_id) {
+        const { error: deletePreferenceError } = await supabase
+          .from("user_deck_card_printings")
+          .delete()
+          .eq("user_id", viewerId)
+          .eq("deck_card_id", selectedCard.id);
+
+        if (deletePreferenceError) {
+          throw deletePreferenceError;
+        }
+      } else {
+        // Caso contrário, salva/atualiza SOMENTE a preferência deste usuário.
+        const { error: preferenceError } = await supabase
+          .from("user_deck_card_printings")
+          .upsert(
+            {
+              user_id: viewerId,
+              deck_card_id: selectedCard.id,
+              printing_scryfall_id: printing.scryfall_id,
+              printing_data: printing,
+              updated_at: new Date().toISOString(),
+            },
+            {
+              onConflict: "user_id,deck_card_id",
+            }
+          );
+
+        if (preferenceError) {
+          throw preferenceError;
+        }
       }
 
-      const refreshedCard: DeckCardRow = {
+      const updatedCard: DeckCardRow = {
         ...selectedCard,
         printing_data: printing,
         card: applyPrintingSnapshot(selectedCard.card, printing),
@@ -3479,125 +3787,23 @@ export default function DeckPage() {
 
       setDeckCards((current) =>
         current.map((row) =>
-          row.id === selectedCard.id ? refreshedCard : row
+          row.id === selectedCard.id ? updatedCard : row
         )
       );
-      setSelectedCard(refreshedCard);
+
+      setSelectedCardQuantity(String(updatedCard.quantity));
+      setSelectedCard(updatedCard);
       setPrintingPickerOpen(false);
-      setChangingPrinting(false);
-      return;
-    }
-
-    setChangingPrinting(true);
-    setPrintingError("");
-
-    const { data: existingPrinting, error: existingPrintingError } =
-      await supabase
-        .from("deck_cards")
-        .select("id, quantity")
-        .eq("deck_id", deck.id)
-        .eq("scryfall_id", printing.scryfall_id)
-        .eq("board", selectedCard.board)
-        .neq("id", selectedCard.id)
-        .maybeSingle();
-
-    if (existingPrintingError) {
-      console.error(
-        "Erro ao verificar impressão existente:",
-        existingPrintingError
+    } catch (error) {
+      console.error("Erro ao salvar impressão pessoal:", error);
+      setPrintingError(
+        "Não foi possível salvar sua impressão preferida."
       );
-      setPrintingError("Não foi possível trocar a impressão.");
+    } finally {
       setChangingPrinting(false);
-      return;
     }
-
-    if (existingPrinting) {
-      const { error: mergeError } = await supabase
-        .from("deck_cards")
-        .update({
-          quantity: existingPrinting.quantity + selectedCard.quantity,
-          printing_data: printing,
-        })
-        .eq("id", existingPrinting.id);
-
-      if (mergeError) {
-        console.error("Erro ao juntar impressões:", mergeError);
-        setPrintingError("Não foi possível trocar a impressão.");
-        setChangingPrinting(false);
-        return;
-      }
-
-      const { error: deleteOldError } = await supabase
-        .from("deck_cards")
-        .delete()
-        .eq("id", selectedCard.id);
-
-      if (deleteOldError) {
-        console.error(
-          "Erro ao remover impressão anterior:",
-          deleteOldError
-        );
-        setPrintingError("Não foi possível finalizar a troca.");
-        setChangingPrinting(false);
-        return;
-      }
-
-      setSelectedCard(null);
-      setPrintingPickerOpen(false);
-      await loadDeckCards(deck.id);
-      setChangingPrinting(false);
-      return;
-    }
-
-    const { error } = await supabase
-      .from("deck_cards")
-      .update({
-        scryfall_id: printing.scryfall_id,
-        oracle_id: printing.oracle_id,
-        printing_data: printing,
-      })
-      .eq("id", selectedCard.id);
-
-    if (error) {
-      console.error("Erro ao trocar impressão:", error);
-      setPrintingError("Não foi possível trocar a impressão.");
-      setChangingPrinting(false);
-      return;
-    }
-
-    const updatedCard: DeckCardRow = {
-      ...selectedCard,
-      scryfall_id: printing.scryfall_id,
-      oracle_id: printing.oracle_id,
-      printing_data: printing,
-      card: applyPrintingSnapshot(selectedCard.card, printing),
-    };
-
-    setSelectedCardQuantity(String(updatedCard.quantity));
-    setSelectedCard(updatedCard);
-    setPrintingPickerOpen(false);
-
-    const updatedAt = new Date().toISOString();
-
-    await supabase
-      .from("decks")
-      .update({ updated_at: updatedAt })
-      .eq("id", deck.id)
-      .eq("owner_id", deck.owner_id);
-
-    setDeck({
-      ...deck,
-      updated_at: updatedAt,
-    });
-
-    setDeckCards((current) =>
-      current.map((row) =>
-        row.id === selectedCard.id ? updatedCard : row
-      )
-    );
-
-    setChangingPrinting(false);
   }
+
 
   async function setCardAsCommander(row: DeckCardRow) {
     if (!deck || !isOwner || !row.id) return;
@@ -4771,14 +4977,14 @@ export default function DeckPage() {
             </button>
           ) : (
             <button
-  type="button"
-  onClick={() => {
-    window.location.href = isOwner ? "/meus-decks" : "/";
-  }}
-  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-[#0b0b0d]/90 px-3.5 py-2 text-xs font-medium text-white/55 shadow-xl shadow-black/20 backdrop-blur-xl transition hover:border-white/25 hover:text-white"
->
-  {isOwner ? "← Voltar para meus decks" : "← CurveOut"}
-</button>
+              type="button"
+              onClick={() => {
+                window.location.href = isOwner ? "/meus-decks" : "/";
+              }}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-[#0b0b0d]/90 px-3.5 py-2 text-xs font-medium text-white/55 shadow-xl shadow-black/20 backdrop-blur-xl transition hover:border-white/25 hover:text-white"
+            >
+              {isOwner ? "← Voltar para meus decks" : "← CurveOut"}
+            </button>
           )}
         </div>
 
@@ -5665,131 +5871,24 @@ export default function DeckPage() {
                 >
                 {/* PROCURAR / ADICIONAR CARTA */}
                 {isOwner && (
-                  <div>
-                  <label
-                    htmlFor="card-search"
-                    className="mb-2 block px-1 text-[11px] uppercase tracking-[0.16em] text-white/25"
-                  >
-                    Adicionar em {activeBoardTitle}
-                  </label>
-
-                  <div className="relative">
-                    <input
-                      id="card-search"
-                      type="search"
-                      value={cardSearch}
-                      autoComplete="off"
-                      onFocus={() => {
-                        if (cardSearchResults.length > 0) {
-                          setCardSearchOpen(true);
-                        }
-                      }}
-                      onChange={(event) => {
-                        const nextValue = event.target.value;
-                        setCardSearch(nextValue);
-                        setCardSearchError("");
-                        setCardSearchStatus("");
-
-                        if (nextValue.trim().length < 2) {
-                          setCardSearchResults([]);
-                          setCardSearchOpen(false);
-                          setHighlightedCardIndex(0);
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          setCardSearchOpen(false);
-                          return;
-                        }
-
-                        if (event.key === "ArrowDown" && cardSearchResults.length > 0) {
-                          event.preventDefault();
-                          setCardSearchOpen(true);
-                          setHighlightedCardIndex((current) =>
-                            Math.min(current + 1, cardSearchResults.length - 1)
-                          );
-                          return;
-                        }
-
-                        if (event.key === "ArrowUp" && cardSearchResults.length > 0) {
-                          event.preventDefault();
-                          setCardSearchOpen(true);
-                          setHighlightedCardIndex((current) =>
-                            Math.max(current - 1, 0)
-                          );
-                          return;
-                        }
-
-                        if (event.key === "Enter" && cardSearchOpen && cardSearchResults.length > 0) {
-                          event.preventDefault();
-                          const selected = cardSearchResults[highlightedCardIndex];
-                          if (selected) {
-                            void addCardToDeck(selected);
-                          }
-                        }
-                      }}
-                      placeholder="Procurar carta..."
-                      className="
-                        w-full rounded-xl
-                        border border-white/10
-                        bg-[#0f0f12]
-                        px-4 py-3 pr-10
-                        text-sm text-white
-                        outline-none transition
-                        placeholder:text-white/25
-                        focus:border-white/30
-                      "
-                    />
-
-                    <span className="pointer-events-none absolute right-4 top-[23px] -translate-y-1/2 text-white/25">
-                      {cardSearchLoading || addingCard ? "…" : "⌕"}
-                    </span>
-
-                    {cardSearchOpen && cardSearchResults.length > 0 && (
-                      <div
-                        className="
-                          absolute left-0 right-0 top-full z-[95] mt-2
-                          max-h-80 overflow-y-auto rounded-xl
-                          border border-white/10 bg-[#111114]/95
-                          p-1.5 shadow-2xl backdrop-blur-xl
-                        "
-                      >
-                        {cardSearchResults.map((suggestion, index) => (
-                          <button
-                            key={suggestion}
-                            type="button"
-                            onMouseEnter={() => setHighlightedCardIndex(index)}
-                            onClick={() => {
-                              void addCardToDeck(suggestion);
-                            }}
-                            className={`
-                              block w-full rounded-lg px-3 py-2.5 text-left text-sm transition
-                              ${
-                                highlightedCardIndex === index
-                                  ? "bg-white/[0.09] text-white"
-                                  : "text-white/60 hover:bg-white/[0.06] hover:text-white"
-                              }
-                            `}
-                          >
-                            {suggestion}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {cardSearchError && (
-                      <p className="mt-2 px-1 text-[11px] text-red-300/70">
-                        {cardSearchError}
-                      </p>
-                    )}
-
-                    {cardSearchStatus && (
-                      <p className="mt-2 px-1 text-[11px] text-emerald-300/70">
-                        {cardSearchStatus}
-                      </p>
-                    )}
-                  </div>
-                </div>
+                  <CardSearchField
+                    value={cardSearch}
+                    activeBoardTitle={activeBoardTitle}
+                    results={cardSearchResults}
+                    open={cardSearchOpen}
+                    loading={cardSearchLoading}
+                    adding={addingCard}
+                    error={cardSearchError}
+                    status={cardSearchStatus}
+                    highlightedIndex={highlightedCardIndex}
+                    onValueChange={setCardSearch}
+                    onOpenChange={setCardSearchOpen}
+                    onResultsChange={setCardSearchResults}
+                    onErrorChange={setCardSearchError}
+                    onStatusChange={setCardSearchStatus}
+                    onHighlightedIndexChange={setHighlightedCardIndex}
+                    onAddCard={addCardToDeck}
+                  />
                 )}
 
                 {/* ORGANIZAR POR */}
@@ -5833,38 +5932,10 @@ export default function DeckPage() {
                 </div>
 
                 {/* PROCURAR NO DECK */}
-                <div>
-                  <label
-                    htmlFor="deck-search"
-                    className="mb-2 block px-1 text-[11px] uppercase tracking-[0.16em] text-white/25"
-                  >
-                    Procurar no deck
-                  </label>
-
-                  <div className="relative">
-                    <input
-                      id="deck-search"
-                      type="search"
-                      value={deckSearch}
-                      onChange={(event) => setDeckSearch(event.target.value)}
-                      placeholder="Nome, tipo, texto, categoria, cor..."
-                      className="
-                        w-full rounded-xl
-                        border border-white/10
-                        bg-[#0f0f12]
-                        px-4 py-3 pr-10
-                        text-sm text-white
-                        outline-none transition
-                        placeholder:text-white/25
-                        focus:border-white/30
-                      "
-                    />
-
-                    <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/25">
-                      ⌕
-                    </span>
-                  </div>
-                </div>
+                <DeckSearchField
+                  value={deckSearch}
+                  onValueChange={setDeckSearch}
+                />
               </div>
               </div>
 
@@ -6185,7 +6256,7 @@ export default function DeckPage() {
                                   : group.name
                               );
                             }}
-                            className={`w-[235px] shrink-0 rounded-xl transition lg:w-[245px] xl:w-[265px] 2xl:w-[285px] ${
+                            className={`w-[235px] shrink-0 rounded-xl transition [content-visibility:auto] [contain-intrinsic-size:520px] lg:w-[245px] xl:w-[265px] 2xl:w-[285px] ${
                               organizeBy === "Categoria" &&
                               categoryDragOver === group.name
                                 ? "bg-white/[0.045] ring-1 ring-white/25"
@@ -6393,6 +6464,8 @@ export default function DeckPage() {
                                         <img
                                           src={image}
                                           alt={row.card?.name ?? "Carta"}
+                                          loading="lazy"
+                                          decoding="async"
                                           draggable={false}
                                           className="block aspect-[63/88] w-full object-cover"
                                         />
@@ -6566,7 +6639,10 @@ export default function DeckPage() {
                     {viewMode === "Linha" && (
                       <div className="space-y-10 pb-8">
                         {deckCardsByType.map((group) => (
-                          <section key={group.name}>
+                          <section
+                            key={group.name}
+                            className="[content-visibility:auto] [contain-intrinsic-size:520px]"
+                          >
                             <div className="mb-3 flex items-center gap-2 px-1">
                               <h3 className="text-sm font-semibold text-white/80">
                                 {group.name}
@@ -6626,6 +6702,7 @@ export default function DeckPage() {
                                           src={cardImage}
                                           alt={cardName}
                                           loading="lazy"
+                                          decoding="async"
                                           draggable={false}
                                           className="h-full w-full object-cover"
                                         />
@@ -7074,6 +7151,7 @@ export default function DeckPage() {
               <img
                 src={getProxiedCardImage(selectedCard.card) ?? ""}
                 alt={selectedCard.card?.name ?? "Carta"}
+                decoding="async"
                 className="block aspect-[63/88] w-full object-cover"
               />
             ) : (
@@ -7614,7 +7692,9 @@ export default function DeckPage() {
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                   {filteredPrintingOptions.map((printing) => {
                     const selected =
-                      printing.scryfall_id === selectedCard.scryfall_id;
+                      printing.scryfall_id ===
+                      (selectedCard.printing_data?.scryfall_id ??
+                        selectedCard.scryfall_id);
 
                     const image =
                       printing.image_uri_large ?? printing.image_uri;
@@ -7646,6 +7726,7 @@ export default function DeckPage() {
                               )}`}
                               alt={printing.name}
                               loading="lazy"
+                              decoding="async"
                               className="aspect-[63/88] w-full object-cover"
                             />
                           ) : (
@@ -8745,6 +8826,8 @@ Sideboard
                                     <img
                                       src={image}
                                       alt={row.card?.name ?? "Carta"}
+                                      loading="lazy"
+                                      decoding="async"
                                       className="h-full w-full object-cover"
                                     />
                                   ) : null}
