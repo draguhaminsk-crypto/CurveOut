@@ -6199,9 +6199,9 @@ export default function DeckPage() {
                         event.stopPropagation();
                         stackScrollDragRef.current.moved = false;
                       }}
-                      className="w-full max-w-full cursor-grab select-none overflow-x-auto overflow-y-hidden overscroll-x-contain pb-6 active:cursor-grabbing [scrollbar-width:thin] [zoom:0.66] lg:[zoom:0.68] xl:[zoom:0.70] 2xl:[zoom:0.72] min-[1900px]:[zoom:0.88]"
+                      className="w-full max-w-full cursor-grab select-none overflow-x-auto overflow-y-hidden overscroll-x-contain pb-6 active:cursor-grabbing [scrollbar-width:thin]"
                     >
-                      <div className="flex w-max min-w-full flex-nowrap items-start justify-start gap-x-3 gap-y-10 px-1 pr-12 pt-1">
+                      <div className="flex w-max min-w-full flex-nowrap items-start justify-start gap-x-5 gap-y-10 px-1 pr-12 pt-1">
                         {deckCardsByType.map((group) => (
                           <section
                             key={group.name}
