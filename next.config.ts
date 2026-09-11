@@ -35,11 +35,29 @@ const contentSecurityPolicy = `
 const nextConfig: NextConfig = {
   poweredByHeader: false,
 
+  // ✅ NOVO: Otimizações de performance
+  compress: true, // Habilita compressão gzip
+  productionBrowserSourceMaps: false, // Reduce bundle size
+
+  // ✅ NOVO: Otimizações de imagens
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "*.scryfall.io",
+      },
+      {
+        protocol: "https",
+        hostname: "*.supabase.co",
+      },
+    ],
+    formats: ["image/webp", "image/avif"], // Formatos modernos
+  },
+
   async headers() {
     return [
       {
         source: "/(.*)",
-
         headers: [
           {
             key: "Content-Security-Policy",
@@ -72,6 +90,13 @@ const nextConfig: NextConfig = {
           {
             key: "Strict-Transport-Security",
             value: "max-age=31536000",
+          },
+
+          // ✅ NOVO: Cache headers para performance
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+            source: "/(_next|public)/.*",
           },
         ],
       },

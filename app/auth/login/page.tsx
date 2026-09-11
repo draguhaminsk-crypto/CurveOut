@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase/client";
 
 export default function LoginPage() {
   const router = useRouter();
-  const supabase = createClient();
+  
+  // ✅ CORRIGIDO: Usar useRef para evitar recrear o cliente
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -16,22 +19,35 @@ export default function LoginPage() {
   async function handleLogin(event: React.FormEvent) {
     event.preventDefault();
 
+    // ✅ CORRIGIDO: Prevenir múltiplos cliques
+    if (loading) return;
+
     setLoading(true);
     setMessage("");
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (error) {
-      setMessage("E-mail ou senha inválidos.");
+      if (error) {
+        setMessage("E-mail ou senha inválidos.");
+        setLoading(false);
+        return;
+      }
+
+      // ✅ CORRIGIDO: Esperar um pouco antes de redirecionar
+      // Garante que o auth state é sincronizado
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      router.push("/");
+      router.refresh();
+    } catch (err) {
+      console.error("Erro ao fazer login:", err);
+      setMessage("Ocorreu um erro. Tente novamente.");
       setLoading(false);
-      return;
     }
-
-    router.push("/");
-    router.refresh();
   }
 
   return (
@@ -59,7 +75,8 @@ export default function LoginPage() {
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               required
-              className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3 outline-none transition focus:border-white/30"
+              disabled={loading}
+              className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3 outline-none transition focus:border-white/30 disabled:opacity-50"
               placeholder="voce@email.com"
             />
           </div>
@@ -74,7 +91,8 @@ export default function LoginPage() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               required
-              className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3 outline-none transition focus:border-white/30"
+              disabled={loading}
+              className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3 outline-none transition focus:border-white/30 disabled:opacity-50"
               placeholder="••••••••"
             />
           </div>
@@ -82,7 +100,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="mt-2 rounded-lg bg-[#f4f1e8] px-5 py-3 font-semibold text-black transition hover:bg-white disabled:opacity-50"
+            className="mt-2 rounded-lg bg-[#f4f1e8] px-5 py-3 font-semibold text-black transition hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? "Entrando..." : "Entrar"}
           </button>
