@@ -6201,7 +6201,7 @@ export default function DeckPage() {
                       }}
                       className="w-full max-w-full cursor-grab select-none overflow-x-auto overflow-y-hidden overscroll-x-contain pb-6 active:cursor-grabbing [scrollbar-width:thin]"
                     >
-                      <div className="flex w-max min-w-full flex-nowrap items-start justify-start gap-x-5 gap-y-10 px-1 pr-12 pt-1">
+                      <div className="flex w-max min-w-full flex-nowrap items-start justify-start gap-x-4 gap-y-10 px-1 pr-12 pt-1 [zoom:0.82] xl:[zoom:0.84] 2xl:[zoom:0.86] min-[1900px]:[zoom:0.90]">
                         {deckCardsByType.map((group) => (
                           <section
                             key={group.name}
