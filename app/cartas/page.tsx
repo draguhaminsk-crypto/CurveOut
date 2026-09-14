@@ -500,9 +500,7 @@ export default function CardsCatalogPage() {
           value.includes(englishQuery)
         );
       })
-      .sort((a, b) =>
-        a.label.localeCompare(b.label, "pt-BR", { sensitivity: "base" })
-      );
+      .slice(0, 16);
   }, [allTypeOptions, selectedTypes, typeSearch]);
 
   function selectAdvancedType(value: string) {
@@ -1131,79 +1129,29 @@ export default function CardsCatalogPage() {
                     />
                   </div>
 
-                  {typeSuggestionsOpen && (
+                  {typeSuggestionsOpen && filteredTypeOptions.length > 0 && (
                     <div
-                      className="absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl border border-white/12 bg-[#111114]/[0.99] shadow-2xl shadow-black/70 backdrop-blur-xl"
+                      className="absolute left-0 right-0 top-full z-50 mt-2 max-h-72 overflow-y-auto rounded-xl border border-white/10 bg-[#111114] p-1.5 shadow-2xl shadow-black/60"
                     >
-                      <div className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-white/[0.07] bg-[#111114]/95 px-4 py-3 backdrop-blur-xl">
-                        <div>
-                          <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-[#c8b27a]/55">
-                            Linha de tipo
-                          </p>
-                          <p className="mt-0.5 text-xs text-white/30">
-                            {typeSearch.trim()
-                              ? `${filteredTypeOptions.length} opção${
-                                  filteredTypeOptions.length === 1 ? "" : "ões"
-                                } encontrada${
-                                  filteredTypeOptions.length === 1 ? "" : "s"
-                                }`
-                              : `${filteredTypeOptions.length} tipos disponíveis`}
-                          </p>
-                        </div>
-
-                        {selectedTypes.length > 0 && (
-                          <span className="rounded-full border border-[#c8b27a]/15 bg-[#c8b27a]/[0.04] px-2.5 py-1 text-[10px] text-[#e7d8b4]/50">
-                            {selectedTypes.length} selecionado{
-                              selectedTypes.length === 1 ? "" : "s"
-                            }
+                      {filteredTypeOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() =>
+                            selectAdvancedType(option.value)
+                          }
+                          className="flex w-full items-center justify-between gap-4 rounded-lg px-3 py-2.5 text-left text-sm transition hover:bg-white/[0.06]"
+                        >
+                          <span className="text-white/70">
+                            {option.label}
                           </span>
-                        )}
-                      </div>
 
-                      <div
-                        className="max-h-[420px] overflow-y-auto p-2 [scrollbar-color:rgba(255,255,255,0.18)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/15 hover:[&::-webkit-scrollbar-thumb]:bg-white/25"
-                      >
-                        {filteredTypeOptions.length === 0 ? (
-                          <div className="px-4 py-8 text-center">
-                            <p className="text-sm text-white/35">
-                              Nenhum tipo encontrado.
-                            </p>
-                            <p className="mt-1 text-xs text-white/20">
-                              Tente pesquisar pelo nome em português ou inglês.
-                            </p>
-                          </div>
-                        ) : (
-                          filteredTypeOptions.map((option) => (
-                            <button
-                              key={option.value}
-                              type="button"
-                              onMouseDown={(event) => event.preventDefault()}
-                              onClick={() =>
-                                selectAdvancedType(option.value)
-                              }
-                              className="group flex w-full items-center justify-between gap-4 rounded-xl border border-transparent px-3.5 py-3 text-left transition hover:border-white/[0.07] hover:bg-white/[0.045]"
-                            >
-                              <div className="min-w-0">
-                                <span className="block truncate text-sm font-medium text-white/72 transition group-hover:text-white/90">
-                                  {option.label}
-                                </span>
-                                <span className="mt-0.5 block truncate text-[11px] text-white/22 md:hidden">
-                                  {option.value}
-                                </span>
-                              </div>
-
-                              <div className="flex shrink-0 items-center gap-3">
-                                <span className="hidden text-xs text-white/22 transition group-hover:text-white/35 md:block">
-                                  {option.value}
-                                </span>
-                                <span className="flex h-6 w-6 items-center justify-center rounded-full border border-white/[0.07] bg-white/[0.02] text-xs text-white/20 transition group-hover:border-[#c8b27a]/20 group-hover:bg-[#c8b27a]/[0.05] group-hover:text-[#e7d8b4]/60">
-                                  +
-                                </span>
-                              </div>
-                            </button>
-                          ))
-                        )}
-                      </div>
+                          <span className="text-xs text-white/25">
+                            {option.value}
+                          </span>
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -1723,10 +1671,10 @@ export default function CardsCatalogPage() {
 }
 
 const inputClass =
-  "w-full rounded-xl border border-white/10 bg-[#0d0d10] px-4 py-3 text-sm text-white/70 outline-none transition placeholder:text-white/18 hover:border-white/15 focus:border-[#c8b27a]/25 focus:bg-[#0f0f12]";
+  "w-full rounded-xl border border-white/10 bg-[#0d0d10] px-4 py-3 text-sm text-white/70 outline-none transition placeholder:text-white/18 focus:border-white/25";
 
 const selectClass =
-  "w-full cursor-pointer appearance-none rounded-xl border border-white/10 bg-[#0d0d10] px-4 py-3 pr-10 text-sm text-white/60 outline-none transition [color-scheme:dark] hover:border-white/15 hover:bg-[#0f0f12] focus:border-[#c8b27a]/25 focus:bg-[#0f0f12] [&>option]:bg-[#111114] [&>option]:text-white/70";
+  "w-full rounded-xl border border-white/10 bg-[#0d0d10] px-3 py-3 text-sm text-white/55 outline-none transition focus:border-white/25";
 
 function FormLabel({
   children,

@@ -1,144 +1,41 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
+import { createAdminClient } from "../../../../lib/supabase/admin";
 
-type ScryfallCard = {
-  id: string;
-  oracle_id?: string;
-  name: string;
-  type_line?: string;
-  set?: string;
-  set_name?: string;
-  collector_number?: string;
-  lang?: string;
-  released_at?: string;
-
-  image_uris?: {
-    normal?: string;
-    large?: string;
-  };
-
-  card_faces?: {
-    image_uris?: {
-      normal?: string;
-      large?: string;
-    };
-  }[];
-};
-
-type ScryfallSearchResponse = {
-  data?: ScryfallCard[];
-  has_more?: boolean;
-  next_page?: string;
-  details?: string;
-};
-
-const scryfallHeaders = {
-  Accept: "application/json",
-  "User-Agent": "CurveOut/0.1",
-};
+type CardData = Record<string, unknown>;
+function str(value: unknown) { return typeof value === "string" ? value : ""; }
 
 export async function GET(request: NextRequest) {
-  const oracleId =
-    request.nextUrl.searchParams.get("oracle_id")?.trim();
-
-  if (!oracleId) {
-    return NextResponse.json(
-      {
-        error: "oracle_id não informado.",
-      },
-      {
-        status: 400,
-      }
-    );
-  }
+  const oracleId = request.nextUrl.searchParams.get("oracle_id")?.trim();
+  if (!oracleId) return Response.json({ error: "oracle_id é obrigatório." }, { status: 400 });
 
   try {
-    let nextUrl: string | null =
-      `https://api.scryfall.com/cards/search?` +
-      new URLSearchParams({
-        q: `oracleid:${oracleId}`,
-        unique: "prints",
-        order: "released",
-        dir: "desc",
-      }).toString();
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from("cards")
+      .select("scryfall_id, oracle_id, name, type_line, image_uri, image_uri_large, card_data")
+      .eq("oracle_id", oracleId);
+    if (error) throw error;
 
-    const cards: ScryfallCard[] = [];
+    const printings = (data ?? []).map((row) => {
+      const cardData = row.card_data && typeof row.card_data === "object" && !Array.isArray(row.card_data) ? (row.card_data as CardData) : {};
+      return {
+        scryfall_id: row.scryfall_id,
+        oracle_id: row.oracle_id,
+        name: row.name,
+        type_line: row.type_line,
+        image_uri: row.image_uri,
+        image_uri_large: row.image_uri_large,
+        set: str(cardData.set).toUpperCase(),
+        set_name: str(cardData.set_name) || "Edição desconhecida",
+        collector_number: str(cardData.collector_number) || "—",
+        lang: (str(cardData.lang) || "en").toUpperCase(),
+        released_at: str(cardData.released_at),
+      };
+    }).sort((a, b) => b.released_at.localeCompare(a.released_at));
 
-    while (nextUrl) {
-      const response = await fetch(nextUrl, {
-        headers: scryfallHeaders,
-        cache: "no-store",
-      });
-
-      const result =
-        (await response.json()) as ScryfallSearchResponse;
-
-      if (!response.ok) {
-        return NextResponse.json(
-          {
-            error:
-              result.details ??
-              "Não foi possível buscar as impressões no Scryfall.",
-          },
-          {
-            status: response.status,
-          }
-        );
-      }
-
-      cards.push(...(result.data ?? []));
-
-      nextUrl =
-        result.has_more && result.next_page
-          ? result.next_page
-          : null;
-    }
-
-    const printings = cards.map((card) => ({
-      scryfall_id: card.id,
-      oracle_id: card.oracle_id ?? null,
-
-      name: card.name,
-      type_line: card.type_line ?? null,
-
-      image_uri:
-        card.image_uris?.normal ??
-        card.card_faces?.[0]?.image_uris?.normal ??
-        null,
-
-      image_uri_large:
-        card.image_uris?.large ??
-        card.card_faces?.[0]?.image_uris?.large ??
-        null,
-
-      set: card.set?.toUpperCase() ?? "—",
-      set_name: card.set_name ?? "Edição desconhecida",
-
-      collector_number:
-        card.collector_number ?? "—",
-
-      lang: card.lang?.toUpperCase() ?? "—",
-
-      released_at:
-        card.released_at ?? "",
-    }));
-
-    return NextResponse.json({
-      printings,
-    });
+    return Response.json({ printings });
   } catch (error) {
-    console.error(
-      "Erro ao buscar impressões no Scryfall:",
-      error
-    );
-
-    return NextResponse.json(
-      {
-        error:
-          "Não foi possível conectar ao Scryfall.",
-      },
-      {
-        status: 502,
-      }
-    );
+    console.error("Erro ao carregar impressões:", error);
+    return Response.json({ error: "Não foi possível carregar as impressões." }, { status: 500 });
   }
 }

@@ -2740,7 +2740,7 @@ export default function DeckPage() {
           return {
             name: groupName,
             cards,
-            quantity: cards.length,
+            quantity: cards.reduce((total, row) => total + row.quantity, 0),
           };
         })
         .filter(
@@ -2774,7 +2774,7 @@ export default function DeckPage() {
         return {
           name: groupName,
           cards,
-          quantity: cards.length,
+          quantity: cards.reduce((total, row) => total + row.quantity, 0),
         };
       })
       .filter((group) => group.cards.length > 0);

@@ -11,27 +11,37 @@ const cinzel = Cinzel({
 
 type Commander = {
   id: string;
+
   name: string;
   printed_name?: string;
+
   set: string;
   set_name: string;
   released_at?: string;
+
   prints_search_uri?: string;
+
   type_line: string;
   printed_type_line?: string;
+
   oracle_text?: string;
   printed_text?: string;
+
   image_uris?: {
     normal?: string;
     large?: string;
   };
+
   card_faces?: {
     name?: string;
     printed_name?: string;
+
     oracle_text?: string;
     printed_text?: string;
+
     type_line?: string;
     printed_type_line?: string;
+
     image_uris?: {
       normal?: string;
       large?: string;
@@ -39,25 +49,13 @@ type Commander = {
   }[];
 };
 
-/**
- * Extrai a imagem da carta com melhor performance
- * Prioriza: large > normal > card_faces[0].large > card_faces[0].normal
- */
-function getCardImage(card: Commander): string | undefined {
-  // Early returns melhoram performance
-  if (card.image_uris?.large) {
-    return card.image_uris.large;
-  }
-  if (card.image_uris?.normal) {
-    return card.image_uris.normal;
-  }
-
-  const firstFace = card.card_faces?.[0];
-  if (!firstFace) {
-    return undefined;
-  }
-
-  return firstFace.image_uris?.large ?? firstFace.image_uris?.normal;
+function getCardImage(card: Commander) {
+  return (
+    card.image_uris?.large ??
+    card.image_uris?.normal ??
+    card.card_faces?.[0]?.image_uris?.large ??
+    card.card_faces?.[0]?.image_uris?.normal
+  );
 }
 
 type CommanderProxyResponse = {
@@ -65,35 +63,21 @@ type CommanderProxyResponse = {
   prints: CommanderPrint[];
 };
 
-/**
- * Busca dados do comandante com cache otimizado
- * ⚡ MELHORIAS:
- * - Cache: "force-cache" melhora performance drasticamente
- * - Next.js revalida automaticamente (ISR)
- * - Reduz chamadas desnecessárias ao servidor
- */
 async function getCommanderData(): Promise<CommanderProxyResponse | null> {
   try {
     const response = await fetch(
       "https://curveout.com.br/api/scryfall/commander",
       {
-        // ✅ ANTES: cache: "no-store" - LENTO (sempre busca)
-        // ✅ DEPOIS: cache: "force-cache" - RÁPIDO (usa cache)
-        cache: "force-cache",
-        // Próxima melhoria: adicionar revalidate em next.config.ts
+        cache: "no-store",
       }
     );
 
     if (!response.ok) {
-      console.error(
-        `[getCommanderData] Erro HTTP ${response.status}`
-      );
       return null;
     }
 
     return response.json();
-  } catch (error) {
-    console.error("[getCommanderData] Erro ao buscar:", error);
+  } catch {
     return null;
   }
 }
@@ -150,6 +134,7 @@ export default async function Home() {
           >
             Decks
           </Link>
+
 
           <Link
             href="/cartas"
@@ -252,7 +237,6 @@ export default async function Home() {
                       src={commanderImage}
                       alt={commanderName}
                       className="mx-auto w-full max-w-[340px] rounded-2xl shadow-2xl"
-                      loading="lazy"
                     />
                   ) : (
                     <div className="mx-auto aspect-[0.716] w-full max-w-[340px] rounded-2xl border border-white/10 bg-white/[0.03]" />
@@ -278,9 +262,11 @@ export default async function Home() {
 
                   <div className="mt-8 flex flex-wrap gap-3">
                     <Link
-                      href={`/decks/novo?commander=${encodeURIComponent(
-                        commander.id
-                      )}`}
+                      href={
+                        commander
+                          ? `/decks/novo?commander=${encodeURIComponent(commander.id)}`
+                          : "/decks/novo"
+                      }
                       className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white"
                     >
                       Criar deck com este comandante

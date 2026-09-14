@@ -1,78 +1,24 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminClient } from "../../../../lib/supabase/admin";
 
 export async function GET(request: NextRequest) {
-  const query =
-    request.nextUrl.searchParams.get("q")?.trim() ?? "";
-
-  if (query.length < 2) {
-    return NextResponse.json({
-      data: [],
-    });
-  }
-
+  const q = request.nextUrl.searchParams.get("q")?.trim() ?? "";
+  if (q.length < 2) return Response.json({ data: [] });
   try {
-    const supabase = createAdminClient();
-
-    const { data: startsWith, error: startsWithError } =
-      await supabase
-        .from("cards")
-        .select("name")
-        .ilike("name", `${query}%`)
-        .order("name")
-        .limit(10);
-
-    if (startsWithError) {
-      throw startsWithError;
+    const admin = createAdminClient();
+    const escaped = q.replaceAll("%", "\\%").replaceAll("_", "\\_");
+    const { data: starts, error: e1 } = await admin.from("cards").select("name").ilike("name", `${escaped}%`).order("name").limit(10);
+    if (e1) throw e1;
+    const names = new Map<string, string>();
+    for (const row of starts ?? []) if (typeof row.name === "string") names.set(row.name.toLowerCase(), row.name);
+    if (names.size < 10) {
+      const { data: contains, error: e2 } = await admin.from("cards").select("name").ilike("name", `%${escaped}%`).order("name").limit(20);
+      if (e2) throw e2;
+      for (const row of contains ?? []) if (typeof row.name === "string") names.set(row.name.toLowerCase(), row.name);
     }
-
-    let names = (startsWith ?? []).map(
-      (card) => card.name
-    );
-
-    if (names.length < 10) {
-      const { data: contains, error: containsError } =
-        await supabase
-          .from("cards")
-          .select("name")
-          .ilike("name", `%${query}%`)
-          .order("name")
-          .limit(20);
-
-      if (containsError) {
-        throw containsError;
-      }
-
-      names = [
-        ...names,
-        ...(contains ?? []).map(
-          (card) => card.name
-        ),
-      ];
-    }
-
-    const uniqueNames = Array.from(
-      new Set(names)
-    ).slice(0, 10);
-
-    return NextResponse.json({
-      data: uniqueNames,
-    });
+    return Response.json({ data: Array.from(names.values()).slice(0, 10) });
   } catch (error) {
-    console.error(
-      "Erro ao buscar cartas no banco do CurveOut:",
-      error
-    );
-
-    return NextResponse.json(
-      {
-        data: [],
-        error:
-          "Não foi possível pesquisar as cartas.",
-      },
-      {
-        status: 500,
-      }
-    );
+    console.error("Erro no autocomplete:", error);
+    return Response.json({ data: [] }, { status: 500 });
   }
 }
