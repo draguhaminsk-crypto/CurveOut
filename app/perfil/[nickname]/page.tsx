@@ -355,9 +355,9 @@ export default function PublicProfilePage() {
                   : null
               )
               .filter(
-                (value): value is string =>
-                  Boolean(value) && viewerFollowingIds.has(value)
-              )
+  (value): value is string =>
+    typeof value === "string" && viewerFollowingIds.has(value)
+)
           )
         ).slice(0, 8);
 
