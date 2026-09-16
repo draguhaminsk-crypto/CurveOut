@@ -2,54 +2,39 @@
 
 /* eslint-disable @next/next/no-img-element */
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import CommanderPrintCarousel from "./CommanderPrintCarousel";
-
-type CommanderPrint = {
-  id: string;
-  set: string;
-  set_name: string;
-  released_at?: string;
-  image: string;
-};
+import type { CommanderPrint } from "./CommanderPrintCarousel";
 
 type Commander = {
   id: string;
-
   name: string;
   printed_name?: string;
-
   set: string;
   set_name: string;
   released_at?: string;
-
   type_line: string;
   printed_type_line?: string;
-
   oracle_text?: string;
   printed_text?: string;
-
   image_uris?: {
     normal?: string;
     large?: string;
   };
-
-  card_faces?: {
+  card_faces?: Array<{
     name?: string;
     printed_name?: string;
-
     oracle_text?: string;
     printed_text?: string;
-
     type_line?: string;
     printed_type_line?: string;
-
     image_uris?: {
       normal?: string;
       large?: string;
     };
-  }[];
+  }>;
 };
 
 type CommanderResponse = {
@@ -60,8 +45,6 @@ type CommanderResponse = {
 type FeaturedCommanderProps = {
   cinzelClassName: string;
 };
-
-const proxyUrl = "/api/scryfall/commander";
 
 function getCardImage(card: Commander) {
   return (
@@ -78,6 +61,7 @@ export default function FeaturedCommander({
   const [data, setData] = useState<CommanderResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -87,20 +71,17 @@ export default function FeaturedCommander({
         setLoading(true);
         setFailed(false);
 
-        const response = await fetch(proxyUrl, {
+        // URL relativa: no localhost usa a API local e, em produção, a API da Vercel.
+        const response = await fetch("/api/scryfall/commander", {
           signal: controller.signal,
           cache: "no-store",
         });
 
         if (!response.ok) {
-          throw new Error(
-            `Proxy respondeu com ${response.status}.`
-          );
+          throw new Error(`Proxy respondeu com ${response.status}.`);
         }
 
-        const result =
-          (await response.json()) as CommanderResponse;
-
+        const result = (await response.json()) as CommanderResponse;
         setData(result);
       } catch (error) {
         if (
@@ -110,11 +91,7 @@ export default function FeaturedCommander({
           return;
         }
 
-        console.error(
-          "Erro ao carregar comandante pelo proxy:",
-          error
-        );
-
+        console.error("Erro ao carregar comandante pelo proxy:", error);
         setFailed(true);
       } finally {
         if (!controller.signal.aborted) {
@@ -123,12 +100,12 @@ export default function FeaturedCommander({
       }
     }
 
-    loadCommander();
+    void loadCommander();
 
     return () => {
       controller.abort();
     };
-  }, []);
+  }, [reloadKey]);
 
   const commander = data?.commander ?? null;
   const commanderPrints = data?.prints ?? [];
@@ -152,9 +129,7 @@ export default function FeaturedCommander({
     commander?.card_faces?.[0]?.oracle_text ??
     "";
 
-  const commanderImage = commander
-    ? getCardImage(commander)
-    : undefined;
+  const commanderImage = commander ? getCardImage(commander) : undefined;
 
   const ligaMagicUrl = commander
     ? `https://www.ligamagic.com.br/?view=cards%2Fsearch&card=${encodeURIComponent(
@@ -195,7 +170,7 @@ export default function FeaturedCommander({
 
             <button
               type="button"
-              onClick={() => window.location.reload()}
+              onClick={() => setReloadKey((value) => value + 1)}
               className="mt-4 text-sm text-white/55 underline underline-offset-4 transition hover:text-white"
             >
               Tentar novamente
@@ -238,9 +213,14 @@ export default function FeaturedCommander({
               )}
 
               <div className="mt-8 flex flex-wrap gap-3">
-                <button className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white">
+                <Link
+                  href={`/decks/novo?commander=${encodeURIComponent(
+                    commander.id
+                  )}`}
+                  className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white"
+                >
                   Criar deck com este comandante
-                </button>
+                </Link>
 
                 <a
                   href={ligaMagicUrl}
