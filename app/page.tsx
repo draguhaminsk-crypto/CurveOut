@@ -157,12 +157,6 @@ export default async function Home() {
           </Link>
         </nav>
 
-        <Link
-          href="/auth/login"
-          className="ml-auto rounded-lg border border-white/10 px-4 py-2 text-sm text-white/60 transition hover:border-white/25 hover:text-white"
-        >
-          Entrar
-        </Link>
       </header>
 
       <main>
