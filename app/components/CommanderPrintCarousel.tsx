@@ -17,6 +17,16 @@ type Props = {
   alt: string;
 };
 
+function circularDistance(index: number, current: number, length: number) {
+  let distance = index - current;
+  const half = length / 2;
+
+  if (distance > half) distance -= length;
+  if (distance < -half) distance += length;
+
+  return distance;
+}
+
 export default function CommanderPrintCarousel({ prints, alt }: Props) {
   const safePrints = useMemo(
     () => Array.from(new Map(prints.map((print) => [print.id, print])).values()),
@@ -44,10 +54,19 @@ export default function CommanderPrintCarousel({ prints, alt }: Props) {
     });
   }
 
+  function selectPrint(printIndex: number) {
+    if (dragged.current) {
+      dragged.current = false;
+      return;
+    }
+
+    setIndex(printIndex);
+  }
+
   return (
-    <div className="mx-auto w-full max-w-[520px] select-none">
+    <div className="mx-auto w-full max-w-[560px] select-none">
       <div
-        className="relative mx-auto w-full max-w-[420px] touch-pan-y cursor-grab active:cursor-grabbing"
+        className="relative mx-auto h-[500px] w-full touch-pan-y overflow-hidden cursor-grab active:cursor-grabbing"
         onPointerDown={(event) => {
           dragStartX.current = event.clientX;
           dragged.current = false;
@@ -75,15 +94,61 @@ export default function CommanderPrintCarousel({ prints, alt }: Props) {
           dragged.current = false;
         }}
       >
-        <div className="relative mx-auto w-full max-w-[340px]">
-          <img
-            key={current.id}
-            src={current.image}
-            alt={`${alt} — ${current.set_name}`}
-            draggable={false}
-            className="w-full rounded-2xl shadow-2xl shadow-black/45"
-          />
-        </div>
+        {/* Fita / coverflow: a edição atual fica no meio e as vizinhas aparecem dos lados. */}
+        {safePrints.map((print, printIndex) => {
+          const distance = circularDistance(
+            printIndex,
+            currentIndex,
+            safePrints.length
+          );
+
+          if (Math.abs(distance) > 2) return null;
+
+          const absDistance = Math.abs(distance);
+          const translateX =
+            distance === 0
+              ? 0
+              : distance === -1
+                ? -188
+                : distance === 1
+                  ? 188
+                  : distance === -2
+                    ? -310
+                    : 310;
+          const scale = absDistance === 0 ? 1 : absDistance === 1 ? 0.78 : 0.62;
+          const opacity = absDistance === 0 ? 1 : absDistance === 1 ? 0.72 : 0.3;
+          const zIndex = absDistance === 0 ? 30 : absDistance === 1 ? 20 : 10;
+
+          return (
+            <button
+              key={print.id}
+              type="button"
+              aria-label={`Ver impressão ${print.set_name}`}
+              title={`${print.set_name}${print.set ? ` (${print.set.toUpperCase()})` : ""}`}
+              onClick={() => selectPrint(printIndex)}
+              className="absolute left-1/2 top-1/2 w-[300px] origin-center -translate-x-1/2 -translate-y-1/2 rounded-[18px] outline-none transition-[transform,opacity,filter] duration-300 ease-out focus-visible:ring-2 focus-visible:ring-white/60"
+              style={{
+                zIndex,
+                opacity,
+                filter: absDistance === 0 ? "none" : "brightness(0.72)",
+                transform: `translate(-50%, -50%) translateX(${translateX}px) scale(${scale})`,
+              }}
+            >
+              <img
+                src={print.image}
+                alt={`${alt} — ${print.set_name}`}
+                draggable={false}
+                loading={absDistance === 0 ? "eager" : "lazy"}
+                decoding="async"
+                className={`w-full rounded-2xl border bg-[#111113] object-contain shadow-2xl transition duration-300 ${
+                  absDistance === 0
+                    ? "border-white/20 shadow-black/55"
+                    : "border-white/10 shadow-black/35 hover:border-white/30 hover:brightness-110"
+                }`}
+              />
+            </button>
+          );
+        })}
 
         {safePrints.length > 1 && (
           <>
@@ -94,7 +159,7 @@ export default function CommanderPrintCarousel({ prints, alt }: Props) {
                 event.stopPropagation();
                 move(-1);
               }}
-              className="absolute left-0 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/75 text-2xl text-white/75 shadow-lg backdrop-blur transition hover:border-white/35 hover:bg-black/90 hover:text-white"
+              className="absolute left-2 top-1/2 z-40 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/80 text-2xl text-white/75 shadow-lg backdrop-blur transition hover:border-white/35 hover:bg-black hover:text-white md:left-3"
             >
               ‹
             </button>
@@ -106,7 +171,7 @@ export default function CommanderPrintCarousel({ prints, alt }: Props) {
                 event.stopPropagation();
                 move(1);
               }}
-              className="absolute right-0 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/75 text-2xl text-white/75 shadow-lg backdrop-blur transition hover:border-white/35 hover:bg-black/90 hover:text-white"
+              className="absolute right-2 top-1/2 z-40 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/80 text-2xl text-white/75 shadow-lg backdrop-blur transition hover:border-white/35 hover:bg-black hover:text-white md:right-3"
             >
               ›
             </button>
@@ -114,7 +179,7 @@ export default function CommanderPrintCarousel({ prints, alt }: Props) {
         )}
       </div>
 
-      <div className="mt-4 text-center">
+      <div className="mt-1 text-center">
         <p className="text-xs font-medium text-white/55">
           {current.set_name}
           {current.set ? ` · ${current.set.toUpperCase()}` : ""}
@@ -131,46 +196,27 @@ export default function CommanderPrintCarousel({ prints, alt }: Props) {
       </div>
 
       {safePrints.length > 1 && (
-        <div className="mt-5 overflow-x-auto pb-2 [scrollbar-width:thin]">
-          <div className="mx-auto flex w-max min-w-full items-center justify-center gap-2.5 px-1">
+        <>
+          <div className="mt-4 flex items-center justify-center gap-1.5">
             {safePrints.map((print, printIndex) => (
               <button
                 key={print.id}
                 type="button"
-                title={`${print.set_name} (${print.set.toUpperCase()})`}
-                aria-label={`Usar impressão ${print.set_name}`}
-                onClick={() => {
-                  if (dragged.current) {
-                    dragged.current = false;
-                    return;
-                  }
-
-                  setIndex(printIndex);
-                }}
-                className={`relative h-[92px] w-[66px] shrink-0 overflow-hidden rounded-lg border transition duration-150 ${
+                aria-label={`Ir para ${print.set_name}`}
+                onClick={() => setIndex(printIndex)}
+                className={`h-1.5 rounded-full transition-all duration-200 ${
                   printIndex === currentIndex
-                    ? "border-white/65 opacity-100 ring-2 ring-white/20"
-                    : "border-white/10 opacity-45 hover:border-white/30 hover:opacity-80"
+                    ? "w-6 bg-white/70"
+                    : "w-1.5 bg-white/20 hover:bg-white/40"
                 }`}
-              >
-                <img
-                  src={print.image}
-                  alt={`${alt} — ${print.set_name}`}
-                  draggable={false}
-                  loading="lazy"
-                  decoding="async"
-                  className="h-full w-full object-cover"
-                />
-              </button>
+              />
             ))}
           </div>
-        </div>
-      )}
 
-      {safePrints.length > 1 && (
-        <p className="mt-1 text-center text-[10px] uppercase tracking-[0.14em] text-white/20">
-          Arraste a carta, use as setas ou escolha uma edição abaixo
-        </p>
+          <p className="mt-3 text-center text-[10px] uppercase tracking-[0.14em] text-white/20">
+            Arraste, use as setas ou clique nas cartas ao lado
+          </p>
+        </>
       )}
     </div>
   );
