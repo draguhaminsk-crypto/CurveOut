@@ -135,7 +135,6 @@ export default async function Home() {
             Decks
           </Link>
 
-
           <Link
             href="/cartas"
             className="transition hover:text-white"
@@ -157,6 +156,13 @@ export default async function Home() {
             Explorar
           </Link>
         </nav>
+
+        <Link
+          href="/auth/login"
+          className="ml-auto rounded-lg border border-white/10 px-4 py-2 text-sm text-white/60 transition hover:border-white/25 hover:text-white"
+        >
+          Entrar
+        </Link>
       </header>
 
       <main>
@@ -262,11 +268,9 @@ export default async function Home() {
 
                   <div className="mt-8 flex flex-wrap gap-3">
                     <Link
-                      href={
-                        commander
-                          ? `/decks/novo?commander=${encodeURIComponent(commander.id)}`
-                          : "/decks/novo"
-                      }
+                      href={`/decks/novo?commander=${encodeURIComponent(
+                        commander.id
+                      )}`}
                       className="rounded-lg bg-[#f4f1e8] px-6 py-3 font-semibold text-black transition hover:bg-white"
                     >
                       Criar deck com este comandante
