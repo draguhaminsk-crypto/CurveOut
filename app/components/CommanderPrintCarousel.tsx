@@ -30,6 +30,32 @@ function getCircularDistance(
   return distance;
 }
 
+function formatReleaseDate(value: string) {
+  const [year, month] = value.split("-");
+  const monthIndex = Number(month) - 1;
+
+  const months = [
+    "jan.",
+    "fev.",
+    "mar.",
+    "abr.",
+    "mai.",
+    "jun.",
+    "jul.",
+    "ago.",
+    "set.",
+    "out.",
+    "nov.",
+    "dez.",
+  ];
+
+  if (!year || monthIndex < 0 || monthIndex > 11) {
+    return value;
+  }
+
+  return `${months[monthIndex]} de ${year}`;
+}
+
 export default function CommanderPrintCarousel({
   prints,
   alt,
@@ -256,6 +282,12 @@ export default function CommanderPrintCarousel({
             <button
               type="button"
               aria-label="Impressão anterior"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+              }}
+              onPointerUp={(event) => {
+                event.stopPropagation();
+              }}
               onClick={(event) => {
                 event.stopPropagation();
                 move(-1);
@@ -291,6 +323,12 @@ export default function CommanderPrintCarousel({
             <button
               type="button"
               aria-label="Próxima impressão"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+              }}
+              onPointerUp={(event) => {
+                event.stopPropagation();
+              }}
               onClick={(event) => {
                 event.stopPropagation();
                 move(1);
@@ -337,14 +375,7 @@ export default function CommanderPrintCarousel({
 
         {current.released_at && (
           <p className="mt-1 text-[11px] text-white/25">
-            {new Intl.DateTimeFormat("pt-BR", {
-              year: "numeric",
-              month: "short",
-            }).format(
-              new Date(
-                `${current.released_at}T00:00:00`
-              )
-            )}
+            {formatReleaseDate(current.released_at)}
           </p>
         )}
       </div>
