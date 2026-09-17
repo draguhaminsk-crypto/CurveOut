@@ -1,48 +1,54 @@
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 type ScryfallCard = {
   id: string;
-  oracle_id?: string;
   name: string;
   printed_name?: string;
+
   set: string;
   set_name: string;
   released_at?: string;
+
+  prints_search_uri?: string;
+
   type_line: string;
   printed_type_line?: string;
+
   oracle_text?: string;
   printed_text?: string;
+
   image_uris?: {
     normal?: string;
     large?: string;
   };
-  card_faces?: Array<{
+
+  card_faces?: {
     name?: string;
     printed_name?: string;
+
     oracle_text?: string;
     printed_text?: string;
+
     type_line?: string;
     printed_type_line?: string;
+
     image_uris?: {
       normal?: string;
       large?: string;
     };
-  }>;
-};
-
-type CommanderPrint = {
-  id: string;
-  set: string;
-  set_name: string;
-  released_at?: string;
-  image: string;
-};
-
-type ScryfallList = {
-  data?: ScryfallCard[];
+  }[];
 };
 
 const scryfallHeaders = {
-  Accept: "application/json",
-  "User-Agent": "CurveOut/1.0",
+  Accept: "application/json;q=0.9,*/*;q=0.8",
+  "User-Agent": "CurveOut/0.1",
+};
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
 };
 
 function getCardImage(card: ScryfallCard) {
@@ -50,132 +56,173 @@ function getCardImage(card: ScryfallCard) {
     card.image_uris?.large ??
     card.image_uris?.normal ??
     card.card_faces?.[0]?.image_uris?.large ??
-    card.card_faces?.[0]?.image_uris?.normal ??
-    null
+    card.card_faces?.[0]?.image_uris?.normal
   );
 }
 
-async function fetchJson<T>(url: string, cache: RequestCache = "no-store") {
-  const response = await fetch(url, {
-    cache,
-    headers: scryfallHeaders,
-  });
+function proxiedImageUrl(imageUrl: string | undefined, origin: string) {
+  if (!imageUrl) return undefined;
 
-  if (!response.ok) return null;
-
-  return (await response.json()) as T;
+  return `${origin}/api/scryfall/image?url=${encodeURIComponent(imageUrl)}`;
 }
 
-export async function GET() {
-  try {
-    // Escolhemos a carta-base em inglês porque as imagens em inglês sempre têm
-    // o scan real da carta. Algumas versões localizadas do Scryfall usam uma
-    // imagem de placeholder "Localized Image Not Available".
-    const commander = await fetchJson<ScryfallCard>(
-      "https://api.scryfall.com/cards/random?q=is%3Acommander+game%3Apaper+lang%3Aen"
-    );
+function proxifyCard(card: ScryfallCard, origin: string): ScryfallCard {
+  return {
+    ...card,
 
-    if (!commander) {
-      return Response.json(
-        { error: "Scryfall indisponível" },
-        { status: 502 }
-      );
-    }
-
-    const oracleId = commander.oracle_id;
-
-    let displayCommander: ScryfallCard = commander;
-
-    // Mantém nome/tipo/texto em português quando houver uma impressão PT,
-    // mas preserva a imagem real da carta-base em inglês.
-    if (oracleId) {
-      const ptQuery = encodeURIComponent(
-        `oracleid:${oracleId} lang:pt game:paper`
-      );
-
-      const ptResult = await fetchJson<ScryfallList>(
-        `https://api.scryfall.com/cards/search?q=${ptQuery}&unique=prints&order=released&dir=desc`
-      );
-
-      const translated = ptResult?.data?.[0];
-
-      if (translated) {
-        displayCommander = {
-          ...commander,
-          printed_name:
-            translated.printed_name ??
-            translated.card_faces?.[0]?.printed_name ??
-            commander.printed_name,
-          printed_type_line:
-            translated.printed_type_line ??
-            translated.card_faces?.[0]?.printed_type_line ??
-            commander.printed_type_line,
-          printed_text:
-            translated.printed_text ??
-            translated.card_faces?.[0]?.printed_text ??
-            commander.printed_text,
-        };
-      }
-    }
-
-    const currentImage = getCardImage(commander);
-    const currentPrint: CommanderPrint | null = currentImage
+    image_uris: card.image_uris
       ? {
-          id: commander.id,
-          set: commander.set,
-          set_name: commander.set_name,
-          released_at: commander.released_at,
-          image: currentImage,
+          normal: proxiedImageUrl(card.image_uris.normal, origin),
+          large: proxiedImageUrl(card.image_uris.large, origin),
+        }
+      : undefined,
+
+    card_faces: card.card_faces?.map((face) => ({
+      ...face,
+      image_uris: face.image_uris
+        ? {
+            normal: proxiedImageUrl(face.image_uris.normal, origin),
+            large: proxiedImageUrl(face.image_uris.large, origin),
+          }
+        : undefined,
+    })),
+  };
+}
+
+async function getRandomCommander(): Promise<ScryfallCard> {
+  const portuguese = await fetch(
+    "https://api.scryfall.com/cards/random?q=is%3Acommander+lang%3Apt",
+    {
+      headers: scryfallHeaders,
+      cache: "no-store",
+    }
+  );
+
+  if (portuguese.ok) {
+    return portuguese.json();
+  }
+
+  const english = await fetch(
+    "https://api.scryfall.com/cards/random?q=is%3Acommander",
+    {
+      headers: scryfallHeaders,
+      cache: "no-store",
+    }
+  );
+
+  if (!english.ok) {
+    throw new Error(`Scryfall respondeu com ${english.status}.`);
+  }
+
+  return english.json();
+}
+
+export function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
+}
+
+export async function GET(request: Request) {
+  try {
+    const requestUrl = new URL(request.url);
+    const origin = requestUrl.origin;
+
+    const rawCommander = await getRandomCommander();
+    const commander = proxifyCard(rawCommander, origin);
+
+    const currentRawImage = getCardImage(rawCommander);
+
+    const currentPrint = currentRawImage
+      ? {
+          id: rawCommander.id,
+          set: rawCommander.set,
+          set_name: rawCommander.set_name,
+          released_at: rawCommander.released_at,
+          image: proxiedImageUrl(currentRawImage, origin)!,
         }
       : null;
 
-    let prints: CommanderPrint[] = currentPrint ? [currentPrint] : [];
+    let prints = currentPrint ? [currentPrint] : [];
 
-    if (oracleId) {
-      const printQuery = encodeURIComponent(
-        `oracleid:${oracleId} lang:en game:paper`
-      );
-
-      const printResult = await fetchJson<ScryfallList>(
-        `https://api.scryfall.com/cards/search?q=${printQuery}&unique=prints&order=released&dir=desc`
-      );
-
-      const otherPrints = (printResult?.data ?? []).flatMap((card) => {
-        const cardImage = getCardImage(card);
-
-        if (!cardImage) return [];
-
-        return [
-          {
-            id: card.id,
-            set: card.set,
-            set_name: card.set_name,
-            released_at: card.released_at,
-            image: cardImage,
-          } satisfies CommanderPrint,
-        ];
+    if (rawCommander.prints_search_uri) {
+      const response = await fetch(rawCommander.prints_search_uri, {
+        headers: scryfallHeaders,
+        next: {
+          revalidate: 3600,
+        },
       });
 
-      prints = Array.from(
-        new Map(
-          [
-            ...(currentPrint ? [currentPrint] : []),
-            ...otherPrints,
-          ].map((print) => [print.id, print])
-        ).values()
-      ).slice(0, 12);
+      if (response.ok) {
+        const result = (await response.json()) as {
+          data: ScryfallCard[];
+        };
+
+        const otherPrints = result.data
+          .map((card) => {
+            const image = getCardImage(card);
+
+            if (!image) {
+              return null;
+            }
+
+            return {
+              id: card.id,
+              set: card.set,
+              set_name: card.set_name,
+              released_at: card.released_at,
+              image: proxiedImageUrl(image, origin)!,
+            };
+          })
+          .filter(
+            (
+              print
+            ): print is {
+              id: string;
+              set: string;
+              set_name: string;
+              released_at: string | undefined;
+              image: string;
+            } => print !== null
+          );
+
+        prints = Array.from(
+          new Map(
+            [...prints, ...otherPrints].map((print) => [
+              print.id,
+              print,
+            ])
+          ).values()
+        ).slice(0, 12);
+      }
     }
 
-    return Response.json({
-      commander: displayCommander,
-      prints,
-    });
+    return Response.json(
+      {
+        commander,
+        prints,
+      },
+      {
+        headers: {
+          ...corsHeaders,
+          "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+          Pragma: "no-cache",
+          Expires: "0",
+        },
+      }
+    );
   } catch (error) {
-    console.error("Erro ao carregar comandante:", error);
+    console.error("Erro no proxy do Scryfall:", error);
 
     return Response.json(
-      { error: "Não foi possível carregar o comandante." },
-      { status: 502 }
+      {
+        error: "Não foi possível acessar o Scryfall.",
+      },
+      {
+        status: 502,
+        headers: corsHeaders,
+      }
     );
   }
 }
