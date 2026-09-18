@@ -1675,7 +1675,7 @@ export default function DeckPage() {
               quantity: row.quantity,
               board: row.board,
               manual_category: row.manual_category ?? null,
-              printing_data: row.printing_data ?? null,
+              printing_data: null,
             }))
           );
 
@@ -2301,7 +2301,7 @@ export default function DeckPage() {
         quantity: row.quantity,
         board: row.board,
         manual_category: row.manual_category ?? null,
-        printing_data: row.printing_data ?? null,
+        printing_data: null,
       }));
 
       const { error: cardsError } = await supabase
@@ -2740,7 +2740,7 @@ export default function DeckPage() {
           return {
             name: groupName,
             cards,
-            quantity: cards.reduce((total, row) => total + row.quantity, 0),
+            quantity: cards.length,
           };
         })
         .filter(
@@ -2774,7 +2774,7 @@ export default function DeckPage() {
         return {
           name: groupName,
           cards,
-          quantity: cards.reduce((total, row) => total + row.quantity, 0),
+          quantity: cards.length,
         };
       })
       .filter((group) => group.cards.length > 0);
@@ -3132,9 +3132,10 @@ export default function DeckPage() {
           ? personalPrintingByDeckCardId.get(row.id) ?? null
           : null;
 
-        // Se o usuário tiver preferência, ela vence apenas na visualização dele.
-        // printing_data do deck continua servindo apenas como snapshot legado/base.
-        const effectivePrinting = personalPrinting ?? row.printing_data ?? null;
+        // A impressão escolhida é uma preferência PESSOAL e específica desta carta do deck.
+        // Não usamos deck_cards.printing_data como fallback, porque esse campo é compartilhado
+        // entre todos os usuários e versões antigas do CurveOut podem ter gravado escolhas nele.
+        const effectivePrinting = personalPrinting;
 
         return {
           ...row,
@@ -3745,9 +3746,11 @@ export default function DeckPage() {
     setPrintingError("");
 
     try {
+      const isBasePrinting = printing.scryfall_id === selectedCard.scryfall_id;
+
       // Se escolher a impressão-base do deck, removemos a preferência pessoal.
       // Assim o usuário volta a acompanhar o padrão daquele deck.
-      if (printing.scryfall_id === selectedCard.scryfall_id) {
+      if (isBasePrinting) {
         const { error: deletePreferenceError } = await supabase
           .from("user_deck_card_printings")
           .delete()
@@ -3781,7 +3784,7 @@ export default function DeckPage() {
 
       const updatedCard: DeckCardRow = {
         ...selectedCard,
-        printing_data: printing,
+        printing_data: isBasePrinting ? null : printing,
         card: applyPrintingSnapshot(selectedCard.card, printing),
       };
 
@@ -4330,7 +4333,7 @@ export default function DeckPage() {
             quantity: 1,
             board: row.board,
             manual_category: row.manual_category ?? null,
-            printing_data: row.printing_data ?? null,
+            printing_data: null,
           })
           .select("id, created_at")
           .single();
