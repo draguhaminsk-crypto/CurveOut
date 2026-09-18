@@ -41,7 +41,6 @@ type ScryfallCard = {
   id: string;
   oracle_id?: string;
   name: string;
-  requested_name?: string;
   type_line?: string;
   mana_cost?: string;
   set?: string;
@@ -58,17 +57,9 @@ type ScryfallSearchResponse = {
   details?: string;
 };
 
-type ImportBoard =
-  | "mainboard"
-  | "commander"
-  | "sideboard"
-  | "maybeboard";
-
 type ImportedCard = {
   quantity: number;
   name: string;
-  board: ImportBoard;
-  original: string;
 };
 
 function getCardImage(card: ScryfallCard) {
@@ -87,72 +78,47 @@ function cleanImportedCardName(rawName: string) {
   return rawName
     .replace(/\s+\([A-Z0-9]{2,8}\)\s+\S+\s*$/i, "")
     .replace(/\s+\[[A-Z0-9]{2,8}\]\s*$/i, "")
-    .replace(/\s+\([A-Z0-9]{2,8}\)\s*$/i, "")
     .trim();
 }
 
 function parseImportedList(value: string): ImportedCard[] {
-  const lines = value.split(/\r?\n/);
-  const cards: ImportedCard[] = [];
-  let currentBoard: ImportBoard = "mainboard";
+  const ignoredHeadings = new Set([
+    "commander",
+    "commanders",
+    "deck",
+    "mainboard",
+    "sideboard",
+    "maybeboard",
+    "considering",
+    "companion",
+  ]);
 
-  const sectionMap: Record<string, ImportBoard> = {
-    commander: "commander",
-    commanders: "commander",
-    "command zone": "commander",
-    deck: "mainboard",
-    mainboard: "mainboard",
-    maindeck: "mainboard",
-    creatures: "mainboard",
-    creature: "mainboard",
-    artifacts: "mainboard",
-    artifact: "mainboard",
-    enchantments: "mainboard",
-    enchantment: "mainboard",
-    instants: "mainboard",
-    instant: "mainboard",
-    sorceries: "mainboard",
-    sorcery: "mainboard",
-    lands: "mainboard",
-    land: "mainboard",
-    planeswalkers: "mainboard",
-    planeswalker: "mainboard",
-    sideboard: "sideboard",
-    maybeboard: "maybeboard",
-    considering: "maybeboard",
-  };
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const normalizedLine = line.replace(/^[-•]\s*/, "").trim();
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
+      if (ignoredHeadings.has(normalizedLine.toLowerCase())) {
+        return [];
+      }
 
-    const normalizedHeading = line
-      .replace(/[:：]$/, "")
-      .trim()
-      .toLocaleLowerCase("en-US");
+      const match = normalizedLine.match(/^(\d+)\s*x?\s+(.+)$/i);
 
-    if (sectionMap[normalizedHeading]) {
-      currentBoard = sectionMap[normalizedHeading];
-      continue;
-    }
+      if (!match) {
+        return [];
+      }
 
-    const normalizedLine = line.replace(/^[-•]\s*/, "").trim();
-    const match = normalizedLine.match(/^(\d+)\s*x?\s+(.+)$/i);
-    if (!match) continue;
+      const quantity = Number(match[1]);
+      const name = cleanImportedCardName(match[2]);
 
-    const quantity = Number(match[1]);
-    const name = cleanImportedCardName(match[2]);
-    if (!quantity || !name) continue;
+      if (!quantity || !name) {
+        return [];
+      }
 
-    cards.push({
-      quantity,
-      name,
-      board: currentBoard,
-      original: line,
+      return [{ quantity, name }];
     });
-  }
-
-  return cards;
 }
 
 export default function NovoDeckPage() {
@@ -202,174 +168,11 @@ export default function NovoDeckPage() {
         return;
       }
 
-      const { data: preferences, error: preferencesError } = await supabase
-        .from("profiles")
-        .select("default_deck_public")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (!preferencesError && preferences) {
-        setIsPublic(preferences.default_deck_public ?? true);
-      }
-
       setCheckingUser(false);
     }
 
     checkUser();
   }, [router, supabase]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadCommanderFromUrl() {
-      const searchParams = new URLSearchParams(window.location.search);
-      const commanderId = searchParams.get("commander");
-
-      if (!commanderId) {
-        return;
-      }
-
-      setCommanderLoading(true);
-      setCommanderError("");
-
-      const { data, error } = await supabase
-        .from("cards")
-        .select(
-          "scryfall_id, oracle_id, name, type_line, mana_cost, image_uri, image_uri_large, card_data"
-        )
-        .eq("scryfall_id", commanderId)
-        .maybeSingle();
-
-      if (cancelled) {
-        return;
-      }
-
-      if (error) {
-        console.error(
-          "Erro ao carregar comandante selecionado na Home:",
-          error
-        );
-        setCommanderError(
-          "Não foi possível carregar o comandante selecionado."
-        );
-        setCommanderLoading(false);
-        return;
-      }
-
-      if (!data) {
-        setCommanderError(
-          "O comandante selecionado não foi encontrado na base do CurveOut."
-        );
-        setCommanderLoading(false);
-        return;
-      }
-
-      const cardData =
-        typeof data.card_data === "object" &&
-        data.card_data !== null &&
-        !Array.isArray(data.card_data)
-          ? (data.card_data as Record<string, unknown>)
-          : {};
-
-      const cardFaces: ScryfallCardFace[] | undefined =
-        Array.isArray(cardData.card_faces)
-          ? cardData.card_faces.flatMap(
-              (face): ScryfallCardFace[] => {
-                if (
-                  typeof face !== "object" ||
-                  face === null ||
-                  Array.isArray(face)
-                ) {
-                  return [];
-                }
-
-                const faceRecord =
-                  face as Record<string, unknown>;
-
-                const imageUris =
-                  typeof faceRecord.image_uris === "object" &&
-                  faceRecord.image_uris !== null &&
-                  !Array.isArray(faceRecord.image_uris)
-                    ? (faceRecord.image_uris as Record<
-                        string,
-                        unknown
-                      >)
-                    : {};
-
-                const parsedFace: ScryfallCardFace = {};
-                const parsedImageUris: ScryfallImageUris = {};
-
-                if (typeof faceRecord.name === "string") {
-                  parsedFace.name = faceRecord.name;
-                }
-
-                if (typeof imageUris.normal === "string") {
-                  parsedImageUris.normal = imageUris.normal;
-                }
-
-                if (typeof imageUris.large === "string") {
-                  parsedImageUris.large = imageUris.large;
-                }
-
-                if (
-                  parsedImageUris.normal ||
-                  parsedImageUris.large
-                ) {
-                  parsedFace.image_uris = parsedImageUris;
-                }
-
-                return [parsedFace];
-              }
-            )
-          : undefined;
-
-      const commander: ScryfallCard = {
-        id: data.scryfall_id,
-        oracle_id: data.oracle_id ?? undefined,
-        name: data.name,
-        type_line: data.type_line ?? undefined,
-        mana_cost: data.mana_cost ?? undefined,
-        set:
-          typeof cardData.set === "string"
-            ? cardData.set
-            : undefined,
-        set_name:
-          typeof cardData.set_name === "string"
-            ? cardData.set_name
-            : undefined,
-        collector_number:
-          typeof cardData.collector_number === "string"
-            ? cardData.collector_number
-            : undefined,
-        lang:
-          typeof cardData.lang === "string"
-            ? cardData.lang
-            : "en",
-        released_at:
-          typeof cardData.released_at === "string"
-            ? cardData.released_at
-            : undefined,
-        image_uris: {
-          normal: data.image_uri ?? undefined,
-          large: data.image_uri_large ?? undefined,
-        },
-        card_faces: cardFaces,
-      };
-
-      setFormat("Commander");
-      setSelectedCommander(commander);
-      setCommanderSearch(commander.name);
-      setCommanderResults([]);
-      setCommanderError("");
-      setCommanderLoading(false);
-    }
-
-    void loadCommanderFromUrl();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [supabase]);
 
   useEffect(() => {
     if (format !== "Commander") return;
@@ -453,66 +256,6 @@ export default function NovoDeckPage() {
     setCommanderError("");
   }
 
-  async function resolveImportedCards() {
-    if (importedCards.length === 0) {
-      return {
-        resolved: [] as Array<{ imported: ImportedCard; card: ScryfallCard }>,
-        missing: [] as string[],
-      };
-    }
-
-    const uniqueNames = Array.from(
-      new Set(importedCards.map((card) => card.name.trim()).filter(Boolean))
-    );
-
-    const response = await fetch("/api/scryfall/cards", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      cache: "no-store",
-      body: JSON.stringify({
-        identifiers: uniqueNames.map((cardName) => ({ name: cardName })),
-      }),
-    });
-
-    const result = (await response.json()) as {
-      cards?: ScryfallCard[];
-      notFound?: Array<{ name?: string }>;
-      error?: string;
-    };
-
-    if (!response.ok) {
-      throw new Error(
-        result.error || "Não foi possível consultar as cartas da lista."
-      );
-    }
-
-    const byName = new Map<string, ScryfallCard>();
-
-    for (const card of result.cards ?? []) {
-      if (card.requested_name) {
-        byName.set(
-          card.requested_name.trim().toLocaleLowerCase("en-US"),
-          card
-        );
-      }
-
-      byName.set(card.name.trim().toLocaleLowerCase("en-US"), card);
-    }
-
-    const missing = uniqueNames.filter(
-      (cardName) => !byName.has(cardName.toLocaleLowerCase("en-US"))
-    );
-
-    const resolved = importedCards.flatMap((imported) => {
-      const card = byName.get(imported.name.toLocaleLowerCase("en-US"));
-      return card ? [{ imported, card }] : [];
-    });
-
-    return { resolved, missing };
-  }
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -533,33 +276,6 @@ export default function NovoDeckPage() {
     if (!user) {
       setCreating(false);
       router.replace("/auth/login");
-      return;
-    }
-
-    let resolvedImport: Awaited<ReturnType<typeof resolveImportedCards>> = {
-      resolved: [],
-      missing: [],
-    };
-
-    try {
-      resolvedImport = await resolveImportedCards();
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Não foi possível preparar a importação."
-      );
-      setCreating(false);
-      return;
-    }
-
-    if (resolvedImport.missing.length > 0) {
-      setErrorMessage(
-        `Não encontrei ${resolvedImport.missing.length} carta(s): ${resolvedImport.missing
-          .slice(0, 8)
-          .join(", ")}${resolvedImport.missing.length > 8 ? "…" : ""}`
-      );
-      setCreating(false);
       return;
     }
 
@@ -621,7 +337,7 @@ export default function NovoDeckPage() {
           quantity: 1,
           board: "commander",
           manual_category: null,
-          printing_data: printingData,
+          printing_data: null,
         });
 
       if (commanderInsertError) {
@@ -646,103 +362,11 @@ export default function NovoDeckPage() {
       }
     }
 
-    if (resolvedImport.resolved.length > 0) {
-      const merged = new Map<
-        string,
-        { imported: ImportedCard; card: ScryfallCard; quantity: number }
-      >();
-
-      for (const entry of resolvedImport.resolved) {
-        const key = `${entry.card.id}:${entry.imported.board}`;
-        const current = merged.get(key);
-
-        merged.set(key, {
-          imported: entry.imported,
-          card: entry.card,
-          quantity: (current?.quantity ?? 0) + entry.imported.quantity,
-        });
-      }
-
-      const rowsToInsert = Array.from(merged.values()).flatMap((entry) => {
-        const duplicatesSelectedCommander =
-          format === "Commander" &&
-          selectedCommander?.id === entry.card.id &&
-          entry.imported.board === "commander";
-
-        if (duplicatesSelectedCommander) {
-          return [];
-        }
-
-        const imageNormal =
-          entry.card.image_uris?.normal ??
-          entry.card.card_faces?.find((face) => face.image_uris?.normal)
-            ?.image_uris?.normal ??
-          null;
-        const imageLarge =
-          entry.card.image_uris?.large ??
-          entry.card.card_faces?.find((face) => face.image_uris?.large)
-            ?.image_uris?.large ??
-          imageNormal;
-
-        return [
-          {
-            deck_id: data.id,
-            scryfall_id: entry.card.id,
-            oracle_id: entry.card.oracle_id ?? null,
-            quantity: entry.quantity,
-            board: entry.imported.board,
-            manual_category: null,
-            printing_data: {
-              scryfall_id: entry.card.id,
-              oracle_id: entry.card.oracle_id ?? null,
-              name: entry.card.name,
-              type_line: entry.card.type_line ?? null,
-              image_uri: imageNormal,
-              image_uri_large: imageLarge,
-              set: entry.card.set ?? "",
-              set_name: entry.card.set_name ?? "",
-              collector_number: entry.card.collector_number ?? "",
-              lang: entry.card.lang ?? "en",
-              released_at: entry.card.released_at ?? "",
-            },
-          },
-        ];
-      });
-
-      if (rowsToInsert.length > 0) {
-        const { error: importInsertError } = await supabase
-          .from("deck_cards")
-          .insert(rowsToInsert);
-
-        if (importInsertError) {
-          await supabase
-            .from("decks")
-            .delete()
-            .eq("id", data.id)
-            .eq("owner_id", user.id);
-
-          setErrorMessage(
-            `Não foi possível importar as cartas: ${importInsertError.message}`
-          );
-          setCreating(false);
-          return;
-        }
-      }
-
-      if (!selectedCommander && format === "Commander") {
-        const importedCommander = Array.from(merged.values()).find(
-          (entry) => entry.imported.board === "commander"
-        );
-
-        if (importedCommander) {
-          await supabase
-            .from("decks")
-            .update({ commander_scryfall_id: importedCommander.card.id })
-            .eq("id", data.id)
-            .eq("owner_id", user.id);
-        }
-      }
-    }
+    /*
+      A área de importação ainda só interpreta e conta a lista.
+      O comandante escolhido, porém, já é salvo imediatamente em
+      deck_cards como board "commander".
+    */
 
     router.push(`/decks/${data.id}`);
     router.refresh();
@@ -1051,9 +675,9 @@ export default function NovoDeckPage() {
                 </div>
 
                 <div className="mt-4 rounded-lg border border-amber-200/10 bg-amber-200/[0.025] px-4 py-3 text-xs leading-5 text-white/30">
-                  Ao criar o deck, o CurveOut vai localizar estas cartas e
-                  adicioná-las automaticamente ao deck. Se algum nome não for
-                  encontrado, a criação é interrompida para você corrigir a lista.
+                  Nesta versão, a lista já é interpretada e contada. No próximo
+                  passo vamos conectar isso ao Scryfall e à tabela de cartas do
+                  deck para fazer a importação automática.
                 </div>
               </div>
             )}
