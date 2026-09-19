@@ -7699,8 +7699,12 @@ export default function DeckPage() {
                       (selectedCard.printing_data?.scryfall_id ??
                         selectedCard.scryfall_id);
 
-                    const image =
+                    const rawImage =
                       printing.image_uri_large ?? printing.image_uri;
+
+                    const image = rawImage
+                      ? `/api/scryfall/image?url=${encodeURIComponent(rawImage)}`
+                      : null;
 
                     return (
                       <button
