@@ -243,11 +243,44 @@ function getCardImage(card?: ResolvedCard) {
   );
 }
 
-function getProxiedCardImage(card?: ResolvedCard) {
-  const image = getCardImage(card);
-  if (!image) return null;
+function unwrapScryfallImageProxy(value?: string | null) {
+  if (!value) return null;
 
-  return `/api/scryfall/image?url=${encodeURIComponent(image)}`;
+  let current = value;
+
+  for (let depth = 0; depth < 3; depth += 1) {
+    try {
+      const parsed = new URL(current, "https://curveout.local");
+
+      if (parsed.pathname !== "/api/scryfall/image") {
+        return current;
+      }
+
+      const nested = parsed.searchParams.get("url");
+
+      if (!nested) {
+        return current;
+      }
+
+      current = nested;
+    } catch {
+      return current;
+    }
+  }
+
+  return current;
+}
+
+function getProxiedImageUrl(value?: string | null) {
+  const rawImage = unwrapScryfallImageProxy(value);
+
+  if (!rawImage) return null;
+
+  return `/api/scryfall/image?url=${encodeURIComponent(rawImage)}`;
+}
+
+function getProxiedCardImage(card?: ResolvedCard) {
+  return getProxiedImageUrl(getCardImage(card));
 }
 
 type DeckCardRow = {
@@ -327,6 +360,44 @@ type CardPrinting = {
   lang: string;
   released_at: string;
 };
+
+function normalizePrintingSnapshot(printing: CardPrinting): CardPrinting {
+  return {
+    ...printing,
+    image_uri: unwrapScryfallImageProxy(printing.image_uri),
+    image_uri_large: unwrapScryfallImageProxy(printing.image_uri_large),
+  };
+}
+
+function dedupePrintingOptions(printings: CardPrinting[]) {
+  const byEdition = new Map<string, CardPrinting>();
+
+  for (const originalPrinting of printings) {
+    const printing = normalizePrintingSnapshot(originalPrinting);
+    const setCode = printing.set.trim().toLocaleLowerCase("en-US");
+    const collectorNumber = printing.collector_number.trim();
+    const key =
+      setCode && collectorNumber
+        ? `${setCode}:${collectorNumber}`
+        : printing.scryfall_id;
+
+    const current = byEdition.get(key);
+
+    if (!current) {
+      byEdition.set(key, printing);
+      continue;
+    }
+
+    const currentLanguage = current.lang.toLocaleLowerCase("en-US");
+    const nextLanguage = printing.lang.toLocaleLowerCase("en-US");
+
+    if (currentLanguage !== "en" && nextLanguage === "en") {
+      byEdition.set(key, printing);
+    }
+  }
+
+  return Array.from(byEdition.values());
+}
 
 function applyPrintingSnapshot(
   baseCard: ResolvedCard | undefined,
@@ -1283,6 +1354,7 @@ export default function DeckPage() {
   const [categorySaving, setCategorySaving] = useState(false);
   const [categoryError, setCategoryError] = useState("");
   const [categoryDragOver, setCategoryDragOver] = useState<string | null>(null);
+  const categoryDragOverRef = useRef<string | null>(null);
   const [selectedCategoryCardIds, setSelectedCategoryCardIds] = useState<
     Set<string>
   >(() => new Set());
@@ -1352,6 +1424,15 @@ export default function DeckPage() {
   const undoActionRef = useRef<UndoAction | null>(null);
   const undoTimerRef = useRef<number | null>(null);
   const cardSearchCacheRef = useRef<Map<string, LocalCardSearchRow>>(new Map());
+
+  function updateCategoryDragOver(nextCategory: string | null) {
+    if (categoryDragOverRef.current === nextCategory) {
+      return;
+    }
+
+    categoryDragOverRef.current = nextCategory;
+    setCategoryDragOver(nextCategory);
+  }
 
   useEffect(() => {
     let animationFrame: number | null = null;
@@ -2022,7 +2103,7 @@ export default function DeckPage() {
     }
 
     setSelectedCategoryCardIds(new Set());
-    setCategoryDragOver(null);
+    updateCategoryDragOver(null);
   }
 
   async function setManualCategory(
@@ -2933,7 +3014,7 @@ export default function DeckPage() {
             if (preference.deck_card_id && preference.printing_data) {
               personalPrintingByDeckCardId.set(
                 preference.deck_card_id,
-                preference.printing_data
+                normalizePrintingSnapshot(preference.printing_data)
               );
             }
           }
@@ -3718,7 +3799,9 @@ export default function DeckPage() {
       }
 
       // Apenas carrega as opções. Abrir o modal NÃO altera o deck.
-      setPrintingOptions(result.printings ?? []);
+      // Normaliza URLs antigas já proxificadas e evita listar o mesmo
+      // set/número repetido apenas por causa do idioma.
+      setPrintingOptions(dedupePrintingOptions(result.printings ?? []));
     } catch (error) {
       console.error("Erro ao carregar impressões:", error);
       setPrintingError(
@@ -3746,7 +3829,9 @@ export default function DeckPage() {
     setPrintingError("");
 
     try {
-      const isBasePrinting = printing.scryfall_id === selectedCard.scryfall_id;
+      const normalizedPrinting = normalizePrintingSnapshot(printing);
+      const isBasePrinting =
+        normalizedPrinting.scryfall_id === selectedCard.scryfall_id;
 
       // Se escolher a impressão-base do deck, removemos a preferência pessoal.
       // Assim o usuário volta a acompanhar o padrão daquele deck.
@@ -3768,8 +3853,8 @@ export default function DeckPage() {
             {
               user_id: viewerId,
               deck_card_id: selectedCard.id,
-              printing_scryfall_id: printing.scryfall_id,
-              printing_data: printing,
+              printing_scryfall_id: normalizedPrinting.scryfall_id,
+              printing_data: normalizedPrinting,
               updated_at: new Date().toISOString(),
             },
             {
@@ -3784,8 +3869,8 @@ export default function DeckPage() {
 
       const updatedCard: DeckCardRow = {
         ...selectedCard,
-        printing_data: isBasePrinting ? null : printing,
-        card: applyPrintingSnapshot(selectedCard.card, printing),
+        printing_data: isBasePrinting ? null : normalizedPrinting,
+        card: applyPrintingSnapshot(selectedCard.card, normalizedPrinting),
       };
 
       setDeckCards((current) =>
@@ -4638,7 +4723,7 @@ export default function DeckPage() {
         quantity: number;
         board: ImportBoard;
         manual_category: null;
-        printing_data: CardPrinting;
+        printing_data: null;
       }> = [];
 
       for (const item of mergedImport.values()) {
@@ -4654,15 +4739,6 @@ export default function DeckPage() {
           continue;
         }
 
-        const imageNormal =
-          item.card.image_uris?.normal ??
-          item.card.card_faces?.[0]?.image_uris?.normal ??
-          null;
-        const imageLarge =
-          item.card.image_uris?.large ??
-          item.card.card_faces?.[0]?.image_uris?.large ??
-          imageNormal;
-
         rowsToInsert.push({
           deck_id: deck.id,
           scryfall_id: item.card.id,
@@ -4670,19 +4746,7 @@ export default function DeckPage() {
           quantity: item.quantity,
           board: item.board,
           manual_category: null,
-          printing_data: {
-            scryfall_id: item.card.id,
-            oracle_id: item.card.oracle_id ?? null,
-            name: item.card.name,
-            type_line: item.card.type_line ?? null,
-            image_uri: imageNormal,
-            image_uri_large: imageLarge,
-            set: item.card.set ?? "",
-            set_name: item.card.set_name ?? "",
-            collector_number: item.card.collector_number ?? "",
-            lang: item.card.lang ?? "en",
-            released_at: item.card.released_at ?? "",
-          },
+          printing_data: null,
         });
       }
 
@@ -6208,6 +6272,19 @@ export default function DeckPage() {
                         {deckCardsByType.map((group) => (
                           <section
                             key={group.name}
+                            onDragEnter={(event) => {
+                              if (
+                                !isOwner ||
+                                organizeBy !== "Categoria" ||
+                                group.name === "Comandante"
+                              ) {
+                                return;
+                              }
+
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "move";
+                              updateCategoryDragOver(group.name);
+                            }}
                             onDragOver={(event) => {
                               if (
                                 !isOwner ||
@@ -6219,7 +6296,6 @@ export default function DeckPage() {
 
                               event.preventDefault();
                               event.dataTransfer.dropEffect = "move";
-                              setCategoryDragOver(group.name);
                             }}
                             onDragLeave={(event) => {
                               if (
@@ -6230,8 +6306,8 @@ export default function DeckPage() {
                                 return;
                               }
 
-                              if (categoryDragOver === group.name) {
-                                setCategoryDragOver(null);
+                              if (categoryDragOverRef.current === group.name) {
+                                updateCategoryDragOver(null);
                               }
                             }}
                             onDrop={(event) => {
@@ -6250,7 +6326,7 @@ export default function DeckPage() {
                                   event.dataTransfer
                                 );
 
-                              setCategoryDragOver(null);
+                              updateCategoryDragOver(null);
 
                               void moveCardsToManualCategory(
                                 draggedIds,
@@ -6382,6 +6458,12 @@ export default function DeckPage() {
 
                                       categoryCardDraggingRef.current = true;
 
+                                      // Durante o drag, não deixa o hover da Stack
+                                      // expandir a carta e recalcular toda a coluna.
+                                      event.currentTarget.style.marginBottom = "0px";
+                                      event.currentTarget.style.transform = "none";
+                                      event.currentTarget.style.transition = "none";
+
                                       const movingIds =
                                         selectedCategoryCardIds.has(row.id)
                                           ? Array.from(selectedCategoryCardIds)
@@ -6396,10 +6478,49 @@ export default function DeckPage() {
                                         "text/plain",
                                         row.id
                                       );
+
+                                      // Preview bem leve para o navegador não precisar
+                                      // rasterizar a carta inteira enquanto ela é arrastada.
+                                      const dragPreview = document.createElement("div");
+                                      dragPreview.textContent =
+                                        movingIds.length > 1
+                                          ? `${movingIds.length} cartas`
+                                          : row.card?.name ?? "Carta";
+                                      dragPreview.style.position = "fixed";
+                                      dragPreview.style.left = "-10000px";
+                                      dragPreview.style.top = "-10000px";
+                                      dragPreview.style.padding = "8px 12px";
+                                      dragPreview.style.borderRadius = "8px";
+                                      dragPreview.style.background = "#17171a";
+                                      dragPreview.style.border =
+                                        "1px solid rgba(255,255,255,.16)";
+                                      dragPreview.style.color =
+                                        "rgba(255,255,255,.82)";
+                                      dragPreview.style.font =
+                                        "600 12px system-ui, sans-serif";
+                                      dragPreview.style.whiteSpace = "nowrap";
+                                      dragPreview.style.pointerEvents = "none";
+                                      dragPreview.style.zIndex = "99999";
+
+                                      document.body.appendChild(dragPreview);
+                                      event.dataTransfer.setDragImage(
+                                        dragPreview,
+                                        24,
+                                        18
+                                      );
+
+                                      window.setTimeout(() => {
+                                        dragPreview.remove();
+                                      }, 0);
                                     }}
-                                    onDragEnd={() => {
+                                    onDragEnd={(event) => {
                                       categoryCardDraggingRef.current = false;
-                                      setCategoryDragOver(null);
+
+                                      event.currentTarget.style.marginBottom = "";
+                                      event.currentTarget.style.transform = "";
+                                      event.currentTarget.style.transition = "";
+
+                                      updateCategoryDragOver(null);
                                     }}
                                     onClick={() => {
                                       if (
@@ -7699,12 +7820,9 @@ export default function DeckPage() {
                       (selectedCard.printing_data?.scryfall_id ??
                         selectedCard.scryfall_id);
 
-                    const rawImage =
-                      printing.image_uri_large ?? printing.image_uri;
-
-                    const image = rawImage
-                      ? `/api/scryfall/image?url=${encodeURIComponent(rawImage)}`
-                      : null;
+                    const image = getProxiedImageUrl(
+                      printing.image_uri_large ?? printing.image_uri
+                    );
 
                     return (
                       <button
@@ -7728,9 +7846,7 @@ export default function DeckPage() {
                         <div className="overflow-hidden rounded-[9px] bg-black/30">
                           {image ? (
                             <img
-                              src={`/api/scryfall/image?url=${encodeURIComponent(
-                                image
-                              )}`}
+                              src={image}
                               alt={printing.name}
                               loading="lazy"
                               decoding="async"
