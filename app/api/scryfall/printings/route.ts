@@ -67,10 +67,6 @@ function getImages(card: ScryfallCard) {
   };
 }
 
-function proxyImage(url: string | null) {
-  if (!url) return null;
-  return `/api/scryfall/image?url=${encodeURIComponent(url)}`;
-}
 
 function toPrinting(card: ScryfallCard): CardPrinting {
   const images = getImages(card);
@@ -80,8 +76,8 @@ function toPrinting(card: ScryfallCard): CardPrinting {
     oracle_id: card.oracle_id ?? null,
     name: card.name,
     type_line: card.type_line ?? null,
-    image_uri: proxyImage(images.normal),
-    image_uri_large: proxyImage(images.large),
+    image_uri: images.normal,
+    image_uri_large: images.large,
     set: card.set?.toUpperCase() ?? "",
     set_name: card.set_name ?? "Edição desconhecida",
     collector_number: card.collector_number ?? "",
@@ -106,7 +102,7 @@ export async function GET(request: Request) {
     let nextUrl: string | null =
       `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}` +
       `&unique=prints&order=released&dir=desc` +
-      `&include_multilingual=true&include_variations=true`;
+      `&include_variations=true`;
 
     const allCards: ScryfallCard[] = [];
     let pageCount = 0;
