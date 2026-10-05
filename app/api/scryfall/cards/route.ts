@@ -94,5 +94,3 @@ function cardRowToScryfallCard(row: CardRow): ScryfallCard {
             large: largeImage,
           }
         : undefined,
-          };
-}
