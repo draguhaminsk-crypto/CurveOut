@@ -214,11 +214,6 @@ type ResolvedCard = {
   released_at?: string;
   rarity?: string;
   printing_source?: "exact" | "oracle-fallback";
-  prices?: {
-    usd?: string | null;
-    usd_foil?: string | null;
-    usd_etched?: string | null;
-  };
   image_uris?: {
     normal?: string;
     large?: string;
@@ -491,7 +486,6 @@ function resolveLocalCard(row: LocalCardSearchRow): ResolvedCard {
     produced_mana: getProducedManaFromCardData(row.card_data),
     ...getPrintingDataFromCardData(row.card_data),
     printing_source: "exact",
-    prices: getPricesFromCardData(row.card_data),
     color_identity: Array.isArray(row.color_identity)
       ? row.color_identity.filter(
           (color): color is string => typeof color === "string"
@@ -670,25 +664,6 @@ function getProducedManaFromCardData(cardData: unknown): string[] {
   return producedMana.filter((color): color is string => typeof color === "string");
 }
 
-function getPricesFromCardData(cardData: unknown): ResolvedCard["prices"] {
-  if (!cardData || typeof cardData !== "object") return undefined;
-
-  const prices = (cardData as { prices?: unknown }).prices;
-  if (!prices || typeof prices !== "object") return undefined;
-
-  const data = prices as {
-    usd?: unknown;
-    usd_foil?: unknown;
-    usd_etched?: unknown;
-  };
-
-  return {
-    usd: typeof data.usd === "string" ? data.usd : null,
-    usd_foil: typeof data.usd_foil === "string" ? data.usd_foil : null,
-    usd_etched: typeof data.usd_etched === "string" ? data.usd_etched : null,
-  };
-}
-
 function getPrintingDataFromCardData(cardData: unknown) {
   if (!cardData || typeof cardData !== "object") {
     return {
@@ -774,12 +749,6 @@ function formatCardRarity(rarity?: string) {
 
   if (!rarity) return null;
   return labels[rarity.toLocaleLowerCase("pt-BR")] ?? rarity;
-}
-
-function parseUsdPrice(value?: string | null) {
-  if (!value) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function getArtCropFromCardData(cardData: unknown): string | undefined {
@@ -1516,11 +1485,6 @@ export default function DeckPage() {
   const [shareCopied, setShareCopied] = useState(false);
   const [deleteDeckOpen, setDeleteDeckOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [priceOpen, setPriceOpen] = useState(false);
-  const [usdBrlRate, setUsdBrlRate] = useState<number | null>(null);
-  const [fxLoading, setFxLoading] = useState(false);
-  const [fxError, setFxError] = useState("");
-  const priceMenuRef = useRef<HTMLDivElement | null>(null);
   const [problemsOpen, setProblemsOpen] = useState(false);
   const problemsMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -2182,21 +2146,6 @@ export default function DeckPage() {
       context.fillText(item, 88, 300 + index * 48);
     });
 
-    context.fillStyle = "rgba(244,241,232,.42)";
-    context.font = "500 22px system-ui, sans-serif";
-    const priceText =
-      deckPrice.usd > 0
-        ? `US$ ${deckPrice.usd.toFixed(2)}${
-            deckPriceBrl !== null
-              ? ` · ≈ ${new Intl.NumberFormat("pt-BR", {
-                  style: "currency",
-                  currency: "BRL",
-                }).format(deckPriceBrl)}`
-              : ""
-          }`
-        : "Preço sem referência";
-    context.fillText(priceText, 650, 300);
-
     if (deckTags.length > 0) {
       context.fillStyle = "rgba(244,241,232,.35)";
       context.font = "500 20px system-ui, sans-serif";
@@ -2223,7 +2172,6 @@ export default function DeckPage() {
   function openCardDetails(row: DeckCardRow) {
     setSelectedCardQuantity(String(row.quantity));
     setSelectedCard(row);
-    void loadUsdBrlRate();
   }
 
   useEffect(() => {
@@ -2671,115 +2619,9 @@ export default function DeckPage() {
     };
   }, [primaryDeckCards, deckCardTotal, deck?.format]);
 
-  const deckPrice = useMemo(() => {
-    let usd = 0;
-    let pricedCopies = 0;
-    let unpricedCopies = 0;
-    const unpricedCards: Array<{
-      key: string;
-      name: string;
-      quantity: number;
-      typeLine: string;
-    }> = [];
-
-    for (const row of primaryDeckCards) {
-      const unitUsd = parseUsdPrice(row.card?.prices?.usd);
-
-      if (unitUsd === null) {
-        unpricedCopies += row.quantity;
-        unpricedCards.push({
-          key:
-            row.id ??
-            `${row.scryfall_id}:${row.board}:${row.card?.name ?? "card"}`,
-          name: row.card?.name ?? row.scryfall_id,
-          quantity: row.quantity,
-          typeLine: row.card?.type_line ?? "Tipo não identificado",
-        });
-        continue;
-      }
-
-      usd += unitUsd * row.quantity;
-      pricedCopies += row.quantity;
-    }
-
-    return { usd, pricedCopies, unpricedCopies, unpricedCards };
-  }, [primaryDeckCards]);
-
-  const deckPriceBrl = usdBrlRate ? deckPrice.usd * usdBrlRate : null;
-
   const commanderIdentityLabel = getColorIdentityName(
     deckStats.commanderIdentity
   );
-  const selectedCardUsd = parseUsdPrice(selectedCard?.card?.prices?.usd);
-  const selectedCardBrl =
-    selectedCardUsd !== null && usdBrlRate
-      ? selectedCardUsd * usdBrlRate
-      : null;
-
-  async function loadUsdBrlRate() {
-    if (usdBrlRate || fxLoading) return;
-
-    setFxLoading(true);
-    setFxError("");
-
-    async function readRate(response: Response) {
-      const contentType = response.headers.get("content-type") ?? "";
-
-      if (!contentType.includes("application/json")) {
-        throw new Error("Resposta de câmbio inválida.");
-      }
-
-      const result = (await response.json()) as {
-        rate?: number;
-        rates?: { BRL?: number };
-        error?: string;
-      };
-
-      const rate =
-        typeof result.rate === "number"
-          ? result.rate
-          : typeof result.rates?.BRL === "number"
-            ? result.rates.BRL
-            : null;
-
-      if (!response.ok || rate === null || !Number.isFinite(rate) || rate <= 0) {
-        throw new Error(result.error ?? "Cotação indisponível.");
-      }
-
-      return rate;
-    }
-
-    try {
-      let rate: number | null = null;
-
-      try {
-        const localResponse = await fetch("/api/fx/usd-brl", {
-          cache: "no-store",
-        });
-        rate = await readRate(localResponse);
-      } catch (localError) {
-        console.warn(
-          "Rota local de câmbio indisponível; tentando fonte pública:",
-          localError
-        );
-
-        const publicResponse = await fetch(
-          "https://api.frankfurter.dev/v1/latest?base=USD&symbols=BRL",
-          { cache: "no-store" }
-        );
-        rate = await readRate(publicResponse);
-      }
-
-      setUsdBrlRate(rate);
-    } catch (error) {
-      console.error("Erro ao carregar cotação USD/BRL:", error);
-      setUsdBrlRate(null);
-      setFxError("Cotação em reais indisponível no momento.");
-    } finally {
-      setFxLoading(false);
-    }
-  }
-
   const deckCardsByType = useMemo(() => {
     if (organizeBy === "Categoria") {
       const hasSearch = deferredDeckSearch.trim().length > 0;
@@ -3054,7 +2896,6 @@ export default function DeckPage() {
           produced_mana: getProducedManaFromCardData(card.card_data),
           ...getPrintingDataFromCardData(card.card_data),
           printing_source: "exact",
-          prices: getPricesFromCardData(card.card_data),
           color_identity: Array.isArray(card.color_identity)
             ? card.color_identity.filter(
                 (color): color is string => typeof color === "string"
@@ -3183,7 +3024,6 @@ export default function DeckPage() {
             ),
             ...getPrintingDataFromCardData(fallbackCard.card_data),
             printing_source: "oracle-fallback",
-            prices: getPricesFromCardData(fallbackCard.card_data),
             color_identity: Array.isArray(fallbackCard.color_identity)
               ? fallbackCard.color_identity.filter(
                   (color): color is string => typeof color === "string"
@@ -3701,13 +3541,6 @@ export default function DeckPage() {
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (
-        priceMenuRef.current &&
-        !priceMenuRef.current.contains(event.target as Node)
-      ) {
-        setPriceOpen(false);
-      }
-
-      if (
         problemsMenuRef.current &&
         !problemsMenuRef.current.contains(event.target as Node)
       ) {
@@ -3717,12 +3550,11 @@ export default function DeckPage() {
 
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setPriceOpen(false);
         setProblemsOpen(false);
       }
     }
 
-    if (priceOpen || problemsOpen) {
+    if (problemsOpen) {
       document.addEventListener("mousedown", handleClickOutside);
       document.addEventListener("keydown", handleEscape);
     }
@@ -3731,7 +3563,7 @@ export default function DeckPage() {
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [priceOpen, problemsOpen]);
+  }, [problemsOpen]);
 
   const filteredPrintingOptions = useMemo(() => {
     const normalizedQuery = deferredPrintingSearch
@@ -5057,7 +4889,7 @@ export default function DeckPage() {
 
         <header
           className={`relative mt-10 overflow-visible border-b border-white/10 pb-16 ${
-            priceOpen || problemsOpen ? "z-[60]" : "z-40"
+            problemsOpen ? "z-[60]" : "z-40"
           }`}
         >
           {!editing && (
@@ -5180,151 +5012,6 @@ export default function DeckPage() {
 
                   <span>•</span>
 
-                  <div ref={priceMenuRef} className="relative z-[220]">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPriceOpen((current) => !current);
-                        setProblemsOpen(false);
-                        void loadUsdBrlRate();
-                      }}
-                      className="
-                        flex items-center gap-1.5
-                        text-white/45
-                        transition
-                        hover:text-white/80
-                      "
-                    >
-                      <span>
-                        {deckPriceBrl !== null
-                          ? `${new Intl.NumberFormat("pt-BR", {
-                              style: "currency",
-                              currency: "BRL",
-                            }).format(deckPriceBrl)}*`
-                          : deckPrice.usd > 0
-                            ? `US$ ${deckPrice.usd.toFixed(2)}`
-                            : "Preço —"}
-                      </span>
-
-                      <span
-                        className={`
-                          inline-block text-[10px] transition-transform
-                          ${priceOpen ? "rotate-180" : ""}
-                        `}
-                      >
-                        ▼
-                      </span>
-                    </button>
-
-                    {priceOpen && (
-                      <div
-                        className="
-                          absolute left-0 top-full z-[300] mt-3
-                          w-64 overflow-hidden
-                          rounded-xl
-                          border border-white/10
-                          bg-[#111114]/95
-                          p-2
-                          shadow-2xl
-                          backdrop-blur-xl
-                        "
-                      >
-                        <div className="rounded-lg px-3 py-2.5">
-                          <p className="text-[10px] uppercase tracking-[0.16em] text-white/25">
-                            Referência TCGplayer
-                          </p>
-
-                          <p className="mt-1 text-sm font-medium text-white/75">
-                            {deckPrice.usd > 0 ? `US$ ${deckPrice.usd.toFixed(2)}` : "US$ —"}
-                          </p>
-                          <p className="mt-1 text-[11px] text-white/25">
-                            Soma das impressões com preço USD disponível.
-                          </p>
-                        </div>
-
-                        <div className="rounded-lg border-t border-white/10 px-3 py-2.5">
-                          <p className="text-[10px] uppercase tracking-[0.16em] text-white/25">
-                            Conversão estimada
-                          </p>
-
-                          <p className="mt-1 text-sm font-medium text-white/75">
-                            {fxLoading
-                              ? "Carregando câmbio..."
-                              : deckPriceBrl !== null
-                                ? `${new Intl.NumberFormat("pt-BR", {
-                                    style: "currency",
-                                    currency: "BRL",
-                                  }).format(deckPriceBrl)}*`
-                                : "R$ —"}
-                          </p>
-
-                          {usdBrlRate && (
-                            <p className="mt-1 text-[11px] text-white/25">
-                              US$ 1 = R$ {usdBrlRate.toFixed(4)}
-                            </p>
-                          )}
-
-                          {fxError && (
-                            <p className="mt-2 rounded-md border border-amber-300/10 bg-amber-300/[0.04] px-2 py-1.5 text-[11px] leading-4 text-amber-100/55">
-                              {fxError}
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="rounded-lg border-t border-white/10 px-3 py-2.5">
-                          <p className="text-[10px] uppercase tracking-[0.16em] text-white/25">
-                            Cobertura
-                          </p>
-                          <p className="mt-1 text-sm font-medium text-white/70">
-                            {deckPrice.pricedCopies} de {deckCardTotal} cartas com preço
-                          </p>
-                          {deckPrice.unpricedCopies > 0 && (
-                            <details className="group mt-2 overflow-hidden rounded-lg border border-white/[0.07] bg-black/15">
-                              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-[11px] text-white/40 transition hover:bg-white/[0.035] hover:text-white/65 [&::-webkit-details-marker]:hidden">
-                                <span>
-                                  Ver {deckPrice.unpricedCopies} carta(s) sem preço
-                                </span>
-                                <span className="text-[9px] transition-transform group-open:rotate-180">
-                                  ▼
-                                </span>
-                              </summary>
-
-                              <div className="max-h-48 overflow-y-auto border-t border-white/[0.06]">
-                                {deckPrice.unpricedCards.map((card) => (
-                                  <div
-                                    key={card.key}
-                                    className="flex items-start justify-between gap-3 border-b border-white/[0.05] px-3 py-2.5 last:border-b-0"
-                                  >
-                                    <div className="min-w-0">
-                                      <p className="truncate text-[11px] font-medium text-white/60">
-                                        {card.name}
-                                      </p>
-                                      <p className="mt-0.5 truncate text-[10px] text-white/25">
-                                        {card.typeLine}
-                                      </p>
-                                    </div>
-
-                                    <span className="shrink-0 rounded-md border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[10px] text-white/35">
-                                      {card.quantity}x
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            </details>
-                          )}
-                        </div>
-
-                        <div className="mx-2 mb-2 mt-1 rounded-lg border border-amber-300/10 bg-amber-300/[0.035] px-3 py-2.5">
-                          <p className="text-[11px] leading-4 text-amber-100/45">
-                            * Conversão apenas estimativa. O preço em reais não representa necessariamente o mercado brasileiro e pode variar por disponibilidade, frete, impostos, condição da carta e preços praticados no Brasil.
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <span>•</span>
-
                   <Link
                     href="/colecao"
                     title={
@@ -5380,7 +5067,6 @@ export default function DeckPage() {
                           title="Ver problemas do deck"
                           onClick={() => {
                             setProblemsOpen((current) => !current);
-                            setPriceOpen(false);
                           }}
                           className="flex h-6 w-6 items-center justify-center rounded-full border border-amber-300/30 bg-amber-300/[0.09] text-[13px] font-bold text-amber-200/90 transition hover:border-amber-200/55 hover:bg-amber-300/[0.15] hover:text-amber-100"
                         >
@@ -5437,17 +5123,6 @@ export default function DeckPage() {
                   <span className="rounded-full border border-white/[0.08] bg-black/15 px-2.5 py-1">
                     {commanderIdentityLabel}
                   </span>
-                  {deckPrice.usd > 0 && (
-                    <span className="rounded-full border border-white/[0.08] bg-black/15 px-2.5 py-1">
-                      US$ {deckPrice.usd.toFixed(2)}
-                      {deckPriceBrl !== null
-                        ? ` · ≈ ${new Intl.NumberFormat("pt-BR", {
-                            style: "currency",
-                            currency: "BRL",
-                          }).format(deckPriceBrl)}`
-                        : ""}
-                    </span>
-                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -5916,7 +5591,6 @@ export default function DeckPage() {
             {errorMessage}
           </p>
         )}
-
 
 
         {!editing && (
@@ -7552,50 +7226,6 @@ export default function DeckPage() {
             </div>
           </div>
 
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.18em] text-white/20">
-              Preço
-            </p>
-
-            <div className="mt-3 border-t border-white/10 pt-3">
-              <p className="text-sm text-white/65">
-                {selectedCardUsd !== null ? `US$ ${selectedCardUsd.toFixed(2)}` : "US$ —"}
-              </p>
-
-              {fxLoading && usdBrlRate === null ? (
-                <p className="mt-1 text-xs text-white/30">
-                  Convertendo para real...
-                </p>
-              ) : selectedCardBrl !== null ? (
-                <>
-                  <p className="mt-1 text-xs font-medium text-white/45">
-                    ≈ {new Intl.NumberFormat("pt-BR", {
-                      style: "currency",
-                      currency: "BRL",
-                    }).format(selectedCardBrl)}*
-                  </p>
-
-                  <p className="mt-1 text-[10px] text-white/20">
-                    US$ 1 = R$ {usdBrlRate?.toFixed(4)}
-                  </p>
-                </>
-              ) : (
-                <p className="mt-1 text-xs text-white/25">
-                  Conversão em real indisponível.
-                </p>
-              )}
-
-              <p
-                title="Referência em dólar. A conversão para real é apenas uma estimativa e não representa necessariamente o preço praticado no Brasil."
-                className="mt-2 inline-flex cursor-help items-center gap-1.5 text-[10px] text-white/25"
-              >
-                <span className="flex h-4 w-4 items-center justify-center rounded-full border border-white/10 text-[9px]">
-                  i
-                </span>
-                Conversão estimada
-              </p>
-            </div>
-          </div>
         </div>
       </div>
           </div>
